@@ -171,11 +171,12 @@ graph.invoke(initial_state, config)            # runs until it pauses before hum
 
 # External approval system records the decision on the checkpointed state...
 graph.update_state(config, {"human_approval": True,
-                            "human_rationale": "Approved by Safety Review Board"})
+                            "human_rationale": "Approved by Safety Review Board",
+                            "human_reviewer": "safety-board-chair"})
 graph.invoke(None, config)                     # ...and resumes from the pause
 ```
 
-The reference `human_review` node reads stdin; a service deployment would replace its body with one that reads the decision already written to state.
+On resume, `human_review` finds the decision already written to state and uses it as recorded: it does not ask again, and unattended mode cannot override it. The audit entry records the reviewer and `decided_by: external`. A decision is cleared once used, and any unused decision is discarded at the start of the next cycle, so a decision can only ever answer the proposal it was given for.
 
 ---
 

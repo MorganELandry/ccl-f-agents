@@ -17,10 +17,10 @@ The framework code in `cclf/` is shared. Only the evidence in `scenarios/` diffe
 
 - Scores incoming evidence for **novelty and independence** before admitting it
 - Infers the **hidden actual commitment state** (ACS) from behavioural signals
-- Detects **Adversarial Commitment Opacity (ACO)**: when an organization's formal state diverges from its actual commitment and the gap is concealed from those who need it
+- Detects **Adversarial Commitment Opacity (ACO)**: when an organization's formal state diverges from its actual commitment and the gap is concealed from those who need it. Condition C1 (formal state vs. a confident estimate) is computed in code, not taken from the model; the model judges C2 and C3, and any disagreement on C1 is audited
 - Proposes state transitions only when admissible evidence supports them
 - Enforces **structurally blocked transitions** with a deterministic guard that uses no LLM, so a model can never override a safety invariant
-- Routes proposed transitions and ACO findings through **human review**
+- Routes proposed transitions and ACO findings through **human review**, which is fail-closed: a transition applies only on an explicit yes, every decision records who made it, and a decision can only answer the proposal it was given for
 - Writes a **hash-chained audit log** of every event, so tampering with any entry breaks the chain
 
 ### Commitment states
@@ -61,7 +61,7 @@ python run_demo.py therac25           # Therac-25, both passes
 python run_demo.py therac25 --pass1-only
 python run_demo.py mcas --no-hitl     # unattended; approvals logged as AUTO-APPROVED
 
-pytest tests/ -v                      # 60 tests, no API key needed
+pytest tests/ -v                      # 90 tests, no API key needed
 ```
 
 Without credentials the demo still runs end to end: LLM nodes degrade to empty results, no transition is proposed, and the state stays at OPEN.

@@ -384,10 +384,18 @@ class CCLFAgentState:
     # Proposed transition (set by evaluation node, consumed by guard node)
     proposed_transition: Optional[CommitmentState] = None
 
-    # Human-in-the-loop verdict (set by the human_review node)
+    # Human-in-the-loop verdict (set by the human_review node, or written in
+    # by an outside approval system while the graph is paused before it).
     # None means "no decision recorded yet"; True / False is the verdict.
+    # apply_transition clears all three once the decision has been used, so
+    # a decision can never carry over into the next review by accident.
     human_approval: Optional[bool] = None
     human_rationale: str = ""
+    # Who decided: a reviewer ID from the outside system, the local user
+    # name for an interactive decision, or "auto" in unattended mode.
+    # CCL-F v0.2 requires every override to record the deciding agent's
+    # identity (Layer 4, Execution Gates), so it goes into the audit log.
+    human_reviewer: str = ""
 
     # Audit log — a list of AuditEntry objects, each chained to the one before
     audit_log: list[AuditEntry] = field(default_factory=list)

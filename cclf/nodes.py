@@ -31,8 +31,8 @@ the next one:
          |                 -> clears state.proposed_transition if it is illegal
          v
     human_review           (only if a move is proposed or ACO was detected;
-         |                  graph.py decides) -> writes state.human_approval
-         v                  and state.human_rationale
+         |                  graph.py decides) -> writes state.human_approval,
+         v                  state.human_rationale and state.human_reviewer
     apply_transition       commits the move if it survived guard and review
          |                 -> writes state.commitment_state, may set
          v                    state.should_terminate
@@ -57,6 +57,7 @@ THE PLAYBILL (what happens in this file)
     Scene 4  transition_evaluation()  Should we propose moving forward?
     Scene 5  transition_guard()       Is the proposed move legal at all?
     Scene 6  human_review()           Does a human (or unattended mode) approve?
+    Entr'acte _clear_review_decision() Forget a decision once it has been used
     Scene 7  apply_transition()       Make the approved move official
     Scene 8  terminate()              Write the closing audit entry
 
@@ -83,6 +84,9 @@ READER'S NOTE — JSON from a language model
 #   hint syntax (dict[str, Any]) works on older Pythons. No runtime effect.
 # os      — read the CCLF_AUTO_APPROVE environment variable in Scene 6.
 # json    — turn the model's text reply into a dict in the Prelude.
+# re      — regular expressions: pick condition labels (C1/C2/C3) out of the
+#   model's reply in Scene 3.
+# getpass — getuser() names the local reviewer in Scene 6.
 # Any     — "any type at all", used for the values of the model's JSON dict.
 # SystemMessage / HumanMessage — LangChain's two message kinds: the system
 #   message sets the model's role and rules, the human message is the
@@ -97,6 +101,8 @@ READER'S NOTE — JSON from a language model
 from __future__ import annotations
 import os
 import json
+import re
+import getpass
 from typing import Any
 
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -112,12 +118,20 @@ from .guards import check_transition, next_valid_state   # the LLM-free rules
 # ===========================================================================
 # DRAMATIS PERSONAE (every module-level variable, declared here at the top)
 # ---------------------------------------------------------------------------
-# None. This file defines no module-level variables: it has only imports and
-# functions. Everything a node needs travels on the state object, and the
-# model is fetched fresh from get_llm() on each call to _llm_json(), so that
-# changing CCLF_LLM_BACKEND or swapping _llm_json in a test takes effect
-# without any cached global getting in the way.
+# Only one setting lives here. Everything else a node needs travels on the
+# state object, and the model is fetched fresh from get_llm() on each call to
+# _llm_json(), so that changing CCLF_LLM_BACKEND or swapping _llm_json in a
+# test takes effect without any cached global getting in the way.
 # ===========================================================================
+
+# ACO_C1_CONFIDENCE — how sure the ACS estimate must be before a mismatch
+#   with the formal state counts as ACO condition C1 (Scene 3).
+#   C1 is checked in plain Python, not by the model: if the estimate's most
+#   likely state differs from the formal state AND its confidence is above
+#   this number, C1 holds. 0.7 is the threshold this repo's ACO design has
+#   always stated; it is a design choice, not a value from the CCL-F v0.2
+#   spec (which does not define ACO).
+ACO_C1_CONFIDENCE: float = 0.7
 
 
 # ===========================================================================
@@ -213,6 +227,14 @@ def evidence_intake(state: CCLFAgentState) -> CCLFAgentState:
     asked for {"novelty": float, "independence": float, "reasoning": str}.
     If the reply is an error dict, both scores default to 0.0, which makes
     the evidence inadmissible: unknown evidence is not trusted.
+
+    First, though, this scene clears the stage. A review decision still on
+    the state at the start of a cycle was recorded for an earlier question
+    (for example, written during a pause, after which the caller sent a new
+    batch instead of resuming). It must not answer whatever this cycle
+    proposes, so it is discarded here, and the discard is audited as
+    REVIEW_DECISION_DISCARDED. A decision written during a pause and then
+    *resumed* is unaffected: resuming continues at human_review, not here.
     """
     # PLAYERS IN THIS SCENE
     #   unscored    evidence items still missing at least one score
@@ -220,6 +242,19 @@ def evidence_intake(state: CCLFAgentState) -> CCLFAgentState:
     #   ev          the evidence item being scored in this loop pass
     #   result      the model's JSON reply (or an error dict) for that item
     #   reasoning   the model's explanation, or "" if it gave none
+
+    # --- Clear the stage: no decision may carry into a new cycle -------------
+    if state.human_approval is not None:
+        state.messages.append(
+            "[evidence_intake] Discarded an unused review decision from an earlier "
+            "cycle; every proposal needs its own decision."
+        )
+        state.append_audit("REVIEW_DECISION_DISCARDED", {
+            "approval": state.human_approval,
+            "rationale": state.human_rationale,
+            "reviewer": state.human_reviewer,
+        })
+        _clear_review_decision(state)
 
     # --- Find the newcomers ------------------------------------------------
     # A list comprehension: keep each e whose novelty or independence score
@@ -388,16 +423,29 @@ def aco_detection(state: CCLFAgentState) -> CCLFAgentState:
 
     ACO conditions (any one sufficient):
       C1: Formal state differs from the ACS most-likely state, with high
-          confidence (the design target is confidence > 0.7)
+          confidence (above ACO_C1_CONFIDENCE, 0.7)
       C2: High-novelty, high-independence evidence is being ignored
       C3: Decision authority is inaccessible while trajectory is locked
 
-    Who checks these? The model does. The code below does not compute C1,
-    C2 or C3 itself, and does not apply the 0.7 threshold; it passes the
-    facts to the model, describes the conditions in the prompt ("high
-    confidence"), and trusts the model's verdict. The prompt asks for
-    {"aco_detected": bool, "conditions_met": [str], "reasoning": str}.
-    On an error dict, aco_detected defaults to False.
+    Who checks these? Two judges, on purpose:
+      - C1 is arithmetic on numbers already in the state, so the code
+        computes it itself, the same way every time (no model involved).
+      - C2 and C3 need judgement about what the evidence means, so the
+        model decides those. The prompt asks for
+        {"aco_detected": bool, "conditions_met": [str], "reasoning": str}.
+        On an error dict, the model's verdict defaults to "not detected".
+
+    How the two verdicts combine:
+      - ACO is detected if the code finds C1, OR the model finds ACO on the
+        strength of C2 / C3 (or names no conditions at all). A model that
+        misses (or denies) a C1 the numbers show cannot switch it off, and a
+        model whose only reason is a C1 the numbers do not show is overruled.
+      - If the code and the model disagree about C1 (in either direction),
+        the disagreement is logged and written to the audit trail as
+        ACO_C1_DISAGREEMENT, so a reviewer can see the model was overruled.
+
+    Note: ACO and C1-C3 are this repo's construct. The CCL-F v0.2 spec does
+    not define them (see docs/ARCHITECTURE.md).
 
     Why it matters downstream: graph.py sends the run to human_review
     whenever ACO is detected, even if nothing was proposed.
@@ -408,12 +456,45 @@ def aco_detection(state: CCLFAgentState) -> CCLFAgentState:
     #                     "potentially suppressed")
     #   acs_most_likely   the state with the highest probability in Scene 2's
     #                     estimate
+    #   acs               short alias for state.acs_estimate
+    #   probs             the estimate's probability for each state
+    #   c1_computed       True if the code's own C1 check holds
     #   result            the model's JSON reply (or an error dict)
+    #   model_failed      True if the model call failed (an error dict)
+    #   model_detected    the model's ACO verdict (True / False)
+    #   raw_conditions    what the model put in "conditions_met" (if a list)
+    #   item, label       loop variables while extracting labels
+    #   model_labels      the C1/C2/C3 labels found there, e.g. ["C1", "C2"]
+    #   model_says_c1     True if the model listed C1 among them
+    #   model_reasoning   the model's explanation text (or "")
+    #   conditions        the final list: the model's, with C1 set by the code
+    #   model_verdict_stands  the model's "detected", after removing any
+    #                     reliance on a C1 the code did not confirm
 
     # --- Prepare the facts for the model -------------------------------------
     admissible = [e for e in state.evidence_buffer if e.is_admissible()]
     ignored = [e for e in state.evidence_buffer if not e.is_admissible()]
     acs_most_likely = state.acs_estimate.most_likely()
+
+    # --- Condition C1, computed in plain Python --------------------------------
+    # Does the estimate point somewhere other than the formal state, and is
+    # it confident enough to take seriously? Same inputs, same answer.
+    # "Somewhere other" is judged on probabilities, not just on the label
+    # most_likely() returns: in a tie, most_likely() picks the first state
+    # in OPEN→EXECUTION order, which could differ from the formal state even
+    # though the formal state is just as likely. Requiring the top state to
+    # be strictly MORE likely than the formal state rules that out.
+    acs = state.acs_estimate
+    probs = {
+        CommitmentState.OPEN:       acs.p_open,
+        CommitmentState.TRAJECTORY: acs.p_trajectory,
+        CommitmentState.AUTHORITY:  acs.p_authority,
+        CommitmentState.EXECUTION:  acs.p_execution,
+    }
+    c1_computed = (
+        probs[acs_most_likely] > probs[state.commitment_state]
+        and acs.confidence > ACO_C1_CONFIDENCE
+    )
 
     # --- Ask the model ------------------------------------------------------
     # Note the user text: the f-strings are joined with `+` to a "\n".join(...)
@@ -441,18 +522,86 @@ def aco_detection(state: CCLFAgentState) -> CCLFAgentState:
         ),
     )
 
-    # --- Record the verdict on the state ---------------------------------------
-    state.aco_detected  = result.get("aco_detected", False)
-    state.aco_reasoning = result.get("reasoning", "")
+    # --- Read the model's verdict defensively -------------------------------
+    # `is True` guards against "aco_detected": "yes". Condition labels are
+    # pulled out of each text item with a regular expression: \bC[123]\b
+    # matches C1, C2 or C3 as a whole word, so "Condition C1", "(C1)" and
+    # "C1: divergence" all count, "C1, C2" yields both, and "C10" matches
+    # nothing. Items that are not text (None, numbers, dicts) are ignored.
+    model_failed = "error" in result
+    model_detected = result.get("aco_detected", False) is True
+    raw_conditions = result.get("conditions_met", [])
+    if not isinstance(raw_conditions, list):
+        raw_conditions = []
+    model_labels = []
+    for item in raw_conditions:
+        if isinstance(item, str):
+            for label in re.findall(r"\bC[123]\b", item.upper()):
+                if label not in model_labels:
+                    model_labels.append(label)
+    model_says_c1 = "C1" in model_labels
 
-    # --- Log it: only a positive finding goes into the audit log --------------
+    # --- Combine: the code owns C1, the model owns C2 and C3 ------------------
+    # Drop any C1 label the model gave, then add C1 back only if the code
+    # found it, so the reported conditions always match the arithmetic.
+    conditions = [label for label in model_labels if label != "C1"]
+
+    # The model's "detected" counts only if C2 or C3 backs it, or if it
+    # named no condition labels at all (we cannot tell, so we lean toward
+    # review). A verdict resting only on a C1 the numbers do not show is
+    # overruled, since its only stated basis has been checked and is false.
+    model_verdict_stands = model_detected and (bool(conditions) or not model_labels)
+
+    if c1_computed:
+        conditions.insert(0, "C1")
+
+    state.aco_detected = c1_computed or model_verdict_stands
+
+    # --- Reasoning: never let the text contradict the verdict ------------------
+    # If ACO stands on the computed C1 alone, lead with the computed reason;
+    # the model's own text (which may say "no ACO") is kept after it, labelled.
+    model_reasoning = result.get("reasoning", "")
+    if not isinstance(model_reasoning, str):
+        model_reasoning = ""
+    if c1_computed and not model_verdict_stands:
+        state.aco_reasoning = (
+            f"C1 (computed): formal state {state.commitment_state} differs from the "
+            f"ACS estimate {acs_most_likely} at confidence {acs.confidence:.2f}."
+        )
+        if model_reasoning:
+            state.aco_reasoning += f" Model's view: {model_reasoning}"
+    else:
+        state.aco_reasoning = model_reasoning
+
+    # --- Disagreement about C1: say so, and keep a permanent record -----------
+    # Only a real answer can disagree: if the model call failed, there is no
+    # model view of C1 to compare, so no disagreement is recorded.
+    if not model_failed and c1_computed != model_says_c1:
+        state.messages.append(
+            f"[aco_detection] C1 disagreement: code computed C1={c1_computed}, "
+            f"model reported C1={model_says_c1}. The computed value stands."
+        )
+        state.append_audit("ACO_C1_DISAGREEMENT", {
+            "c1_computed": c1_computed,
+            "c1_model": model_says_c1,
+            "formal_state": state.commitment_state,
+            "acs_most_likely": acs_most_likely,
+            "acs_confidence": acs.confidence,
+            "threshold": ACO_C1_CONFIDENCE,
+        })
+
+    # --- Log the verdict: only a positive finding goes into the audit log -----
     if state.aco_detected:
         state.messages.append(
             f"[aco_detection] ⚠️  ACO DETECTED — conditions: "
-            f"{result.get('conditions_met', [])} — {state.aco_reasoning}"
+            f"{conditions} — {state.aco_reasoning}"
         )
         state.append_audit("ACO_DETECTED", {
-            "conditions_met": result.get("conditions_met", []),
+            "conditions_met": conditions,
+            "c1_computed": c1_computed,
+            "model_detected": model_detected,
+            "model_verdict_stands": model_verdict_stands,
+            "model_failed": model_failed,
             "reasoning": state.aco_reasoning,
         })
     else:
@@ -641,11 +790,21 @@ def human_review(state: CCLFAgentState) -> CCLFAgentState:
     Enter:   state   the shared agent state; graph.py routes here when a
                      move is proposed (and has passed the guard) or when ACO
                      was detected
-    Exit:    the same state, with state.human_approval (True / False) and
-             state.human_rationale set; one message and one HUMAN_REVIEW
-             audit entry. Prints a review panel to stdout as a side effect.
+    Exit:    the same state, with state.human_approval (True / False),
+             state.human_rationale and state.human_reviewer set; one message
+             and one HUMAN_REVIEW audit entry (with reviewer and decided_by).
+             Prints a review panel to stdout as a side effect.
 
     How the decision is made, in order:
+      0. Already decided. If state.human_approval is already True or False
+         when this node starts, an outside approval system wrote it in while
+         the graph was paused before this node (see below). That decision is
+         used as recorded: nobody is asked again and unattended mode cannot
+         overwrite it. (A leftover decision from an earlier cycle cannot be
+         mistaken for this: apply_transition clears the decision every time
+         it has been used, and evidence_intake discards any unused one at
+         the start of each new cycle.) An external decision with no
+         reviewer ID is recorded with the reviewer "external (unidentified)".
       1. Unattended mode. If the environment variable CCLF_AUTO_APPROVE is
          "true" (any capitalisation; run_demo.py --no-hitl and the tests set
          it), the node approves without asking anyone, and records the
@@ -667,26 +826,23 @@ def human_review(state: CCLFAgentState) -> CCLFAgentState:
     stops just before this node and saves its state. An external system
     (webhook, UI click, etc.) later records the decision with
     graph.update_state(config, {...}) and resumes with
-    graph.invoke(None, config); see tests/test_checkpoint.py. Be aware that
-    resuming runs this node's body: as written it will still prompt on
-    stdin, or in unattended mode overwrite human_approval / human_rationale
-    with the AUTO-APPROVED decision. The CLI (run_demo.py) therefore does
-    not pause; it runs this node inline.
+    graph.invoke(None, config); see tests/test_checkpoint.py. Resuming runs
+    this node's body, which is why rule 0 above exists: the node sees the
+    decision already recorded and uses it instead of asking again. The CLI
+    (run_demo.py) does not pause; it runs this node inline.
 
-    LangGraph interrupt pattern:
-        from langgraph.checkpoint.memory import MemorySaver
-        graph = build_graph().compile(checkpointer=MemorySaver(),
-                                       interrupt_before=["human_review"])
-        # External system resumes with: graph.invoke(state, config)
-    (In this repo build_graph() already compiles the graph and takes care of
-    the checkpointer and interrupt itself, as described above.)
+    Every decision is written to the audit log with how it was made
+    ("external", "interactive" or "auto") and who made it, because CCL-F
+    v0.2 requires every override to record the deciding agent's identity.
     """
     # PLAYERS IN THIS SCENE
-    #   a           short alias for state.acs_estimate, for the printout
-    #   msg         one recent message, in the printing loop
-    #   approved    the decision: True (approved) or False (rejected)
-    #   rationale   the reason recorded alongside the decision
-    #   answer      what the reviewer typed (interactive modes only)
+    #   a            short alias for state.acs_estimate, for the printout
+    #   msg          one recent message, in the printing loop
+    #   approved     the decision: True (approved) or False (rejected)
+    #   rationale    the reason recorded alongside the decision
+    #   reviewer     who decided (reviewer ID, local user name, or "auto")
+    #   decided_by   how: "external", "interactive" or "auto"
+    #   answer       what the reviewer typed (interactive modes only)
 
     # --- Show the reviewer the situation -----------------------------------
     # "="*60 repeats the "=" character 60 times to draw a rule line.
@@ -711,39 +867,86 @@ def human_review(state: CCLFAgentState) -> CCLFAgentState:
     # --- Get the decision ------------------------------------------------------
     # os.environ.get(name, "") returns "" when the variable is unset, so
     # .lower() is always safe to call.
-    if os.environ.get("CCLF_AUTO_APPROVE", "").lower() == "true":
+    if state.human_approval is not None:
+        # Rule 0: an outside system recorded the decision during a pause.
+        # Use it exactly as recorded; `is True` keeps anything odd a "no".
+        approved = state.human_approval is True
+        rationale = state.human_rationale or "(no rationale recorded)"
+        reviewer = state.human_reviewer or "external (unidentified)"
+        decided_by = "external"
+    elif os.environ.get("CCLF_AUTO_APPROVE", "").lower() == "true":
         # Unattended demo mode (run_demo.py --no-hitl). The LLM-free guard
         # has already passed; the decision is recorded as automatic so the
         # audit chain never shows it as a human approval.
         approved, rationale = True, "AUTO-APPROVED (unattended mode, no human reviewer)"
-    elif state.proposed_transition:
-        # input() blocks until the reviewer presses Enter; .strip() removes
-        # surrounding spaces and the newline.
-        answer = input(
-            f"\nApprove transition to {state.proposed_transition}? [y/n/reason]: "
-        ).strip()
-        approved = answer.lower().startswith("y")
-        rationale = answer if not approved else "Approved by human reviewer."
+        reviewer, decided_by = "auto", "auto"
     else:
-        answer = input(
-            "\nNo transition proposed (escalation). Continue monitoring? [y/n]: "
-        ).strip()
-        approved = answer.lower().startswith("y")
-        rationale = answer
+        # Interactive: input() blocks until the reviewer presses Enter;
+        # .strip() removes surrounding spaces and the newline. The reviewer
+        # is identified by their login name on this machine.
+        if state.proposed_transition:
+            answer = input(
+                f"\nApprove transition to {state.proposed_transition}? [y/n/reason]: "
+            ).strip()
+            approved = answer.lower().startswith("y")
+            rationale = answer if not approved else "Approved by human reviewer."
+        else:
+            answer = input(
+                "\nNo transition proposed (escalation). Continue monitoring? [y/n]: "
+            ).strip()
+            approved = answer.lower().startswith("y")
+            rationale = answer
+        # getuser() reads the login name from the environment or the OS and
+        # can fail in unusual setups (e.g. some containers); never let that
+        # lose a decision the reviewer has already typed.
+        try:
+            reviewer = getpass.getuser()
+        except Exception:
+            reviewer = "interactive (unidentified)"
+        decided_by = "interactive"
 
     # --- Record the decision on the state, in messages and in the audit -------
     state.human_approval  = approved
     state.human_rationale = rationale
+    state.human_reviewer  = reviewer
     state.messages.append(
-        f"[human_review] Decision: {'APPROVED' if approved else 'REJECTED'} — {rationale}"
+        f"[human_review] Decision ({decided_by}, {reviewer}): "
+        f"{'APPROVED' if approved else 'REJECTED'} — {rationale}"
     )
     state.append_audit("HUMAN_REVIEW", {
         "proposed": state.proposed_transition.value if state.proposed_transition else None,
         "approved": approved,
         "rationale": rationale,
+        "reviewer": reviewer,
+        "decided_by": decided_by,
     })
     print("="*60 + "\n")
     return state
+
+
+# ===========================================================================
+# ENTR'ACTE — CLEARING THE STAGE
+# _clear_review_decision(): forget a review decision once it has been used
+# ===========================================================================
+
+def _clear_review_decision(state: CCLFAgentState) -> None:
+    """
+    Reset the review decision fields to "no decision recorded".
+
+    Enter:   state   the shared agent state
+    Exit:    nothing returned; human_approval, human_rationale and
+             human_reviewer are reset on the state (the audit log keeps the
+             permanent record of the decision)
+
+    Why this matters: human_review treats a decision already on the state as
+    one recorded by an outside approval system (rule 0). If a used decision
+    were left behind, the next review would silently reuse it. Clearing it
+    every time apply_transition finishes guarantees a fresh decision for
+    every review.
+    """
+    state.human_approval  = None
+    state.human_rationale = ""
+    state.human_reviewer  = ""
 
 
 # ===========================================================================
@@ -756,23 +959,28 @@ def apply_transition(state: CCLFAgentState) -> CCLFAgentState:
     Commit the proposed transition to state.
 
     Enter:   state   the shared agent state; uses state.proposed_transition,
-                     state.human_approval and state.human_rationale
-    Exit:    the same state. One of three outcomes:
-               nothing proposed     -> message only
-               human rejected it    -> message, proposal cleared
-               otherwise            -> state.commitment_state moves forward,
-                                       proposal and approval are cleared, a
-                                       TRANSITION_APPLIED audit entry is
-                                       written, and should_terminate is set
-                                       if EXECUTION was reached
+                     state.human_approval and state.human_rationale (and
+                     clears human_reviewer with them)
+    Exit:    the same state. One of four outcomes:
+               nothing proposed       -> message only
+               reviewer said no       -> message, proposal cleared
+               no decision recorded   -> message, proposal cleared, and a
+                                         TRANSITION_NOT_APPROVED audit entry
+               explicit yes           -> state.commitment_state moves forward,
+                                         a TRANSITION_APPLIED audit entry is
+                                         written, and should_terminate is set
+                                         if EXECUTION was reached
+             In every case the review decision (approval, rationale,
+             reviewer) is cleared afterwards, so it can never be reused by
+             the next review by mistake.
 
-    graph.py always comes here after the guard, either directly (nothing
-    proposed, no ACO) or via human_review. Any surviving proposal has
-    therefore passed the guard and been through review.
-
-    Note the test is `human_approval is False`, not `not human_approval`:
-    only an explicit rejection stops the move. A value of None (no decision
-    recorded) does not block it.
+    Fail-closed: only `human_approval is True` lets a move through. In the
+    current wiring every proposal passes through human_review, which always
+    records True or False, so "no decision" should never happen; if the
+    graph is ever rewired, or this node is called directly, the move is
+    refused and the refusal is audited rather than quietly allowed. CCL-F
+    v0.2's Rule 4 asks for a single agent to explicitly accept authorization;
+    silence is not acceptance.
     """
     # PLAYERS IN THIS SCENE
     #   from_state   the state we are leaving, kept for the log and audit
@@ -780,6 +988,7 @@ def apply_transition(state: CCLFAgentState) -> CCLFAgentState:
     # --- Case 1: nothing to do -------------------------------------------------
     if not state.proposed_transition:
         state.messages.append("[apply_transition] Nothing to apply.")
+        _clear_review_decision(state)
         return state
 
     # --- Case 2: the reviewer said no --------------------------------------------
@@ -788,13 +997,29 @@ def apply_transition(state: CCLFAgentState) -> CCLFAgentState:
             f"[apply_transition] Transition rejected by human: {state.human_rationale}"
         )
         state.proposed_transition = None
+        _clear_review_decision(state)
         return state
 
-    # --- Case 3: apply it, and reset the proposal and verdict for next time ---
+    # --- Case 3: no explicit yes on record: refuse, and say so ----------------
+    if state.human_approval is not True:
+        state.messages.append(
+            f"[apply_transition] ❌ Not applied: no explicit approval recorded for "
+            f"{state.commitment_state} → {state.proposed_transition}."
+        )
+        state.append_audit("TRANSITION_NOT_APPROVED", {
+            "from": state.commitment_state,
+            "proposed": state.proposed_transition,
+            "reason": "no explicit approval recorded",
+        })
+        state.proposed_transition = None
+        _clear_review_decision(state)
+        return state
+
+    # --- Case 4: apply it, and reset the proposal and verdict for next time ---
     from_state = state.commitment_state
     state.commitment_state    = state.proposed_transition
     state.proposed_transition = None
-    state.human_approval      = None
+    _clear_review_decision(state)
 
     state.messages.append(
         f"[apply_transition] ✅ Transition applied: {from_state} → {state.commitment_state}"

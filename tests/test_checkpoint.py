@@ -149,7 +149,8 @@ def test_pause_update_resume(monkeypatch):
     Enter:   monkeypatch   pytest fixture used to swap in the fake LLM and
                            set environment variables for this test only
     Exit:    passes if the run pauses at human_review, resumes to TRAJECTORY,
-             finishes with nothing left to run, and keeps an unbroken audit chain
+             finishes with nothing left to run, keeps an unbroken audit chain,
+             and records the outside decision (reviewer and rationale) as given
     """
     # PLAYERS IN THIS SCENE
     #   graph       the compiled agent graph, set to pause before human_review
@@ -164,7 +165,9 @@ def test_pause_update_resume(monkeypatch):
     # The fake evaluator always says "advance", so the graph proposes
     # OPEN → TRAJECTORY and routes to human_review.
     monkeypatch.setattr(nodes, "_llm_json", scripted_llm("advance"))
-    monkeypatch.setenv("CCLF_AUTO_APPROVE", "true")   # node body must not read stdin
+    # Unattended mode is ON on purpose: it would approve on its own, so this
+    # proves the outside decision wins over it (and that stdin is not read).
+    monkeypatch.setenv("CCLF_AUTO_APPROVE", "true")
     monkeypatch.setenv("CCLF_OBSERVABILITY_ENABLED", "false")
 
     # --- Setting the stage: graph and starting state -----------------------
@@ -193,12 +196,11 @@ def test_pause_update_resume(monkeypatch):
         # --- The action, part 2: the outside world decides, then resume ----
         # update_state() writes the human decision into the saved state.
         # invoke(None, config) means "no new input: carry on from the
-        # checkpoint". human_review then runs; because CCLF_AUTO_APPROVE is
-        # set it approves without reading stdin (writing its own
-        # "AUTO-APPROVED" rationale over the one supplied here), and
-        # apply_transition commits the move.
+        # checkpoint". human_review then runs, finds the decision already
+        # recorded, and uses it as-is; apply_transition commits the move.
         graph.update_state(config, {"human_approval": True,
-                                    "human_rationale": "Approved by review board"})
+                                    "human_rationale": "Approved by review board",
+                                    "human_reviewer": "board-member-7"})
         final = CCLFAgentState.from_stream(graph.invoke(None, config))
 
     # --- The verdict, part 2 -----------------------------------------------
@@ -208,5 +210,12 @@ def test_pause_update_resume(monkeypatch):
     assert graph.get_state(config).next == ()
     for prev, cur in zip(final.audit_log, final.audit_log[1:]):
         assert cur.prev_hash == prev.entry_hash
+
+    # The audit records the outside decision exactly as it was given: who
+    # decided, why, and that it came from outside (not auto-approved).
+    review = [a for a in final.audit_log if a.event_type == "HUMAN_REVIEW"][-1]
+    assert review.payload["rationale"] == "Approved by review board"
+    assert review.payload["reviewer"] == "board-member-7"
+    assert review.payload["decided_by"] == "external"
 
 # EXEUNT — end of file.

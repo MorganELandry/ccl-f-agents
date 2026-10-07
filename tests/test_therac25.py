@@ -439,7 +439,7 @@ class TestACOConditions:
 
         Enter:   self   unused
         Exit:    passes if the estimate's top state is TRAJECTORY, its
-                 confidence is at least 0.7, and it differs from the formal state
+                 confidence is above 0.7, and it differs from the formal state
         """
         # PLAYERS IN THIS SCENE
         #   formal_state   what AECL said publicly: still OPEN (investigating)
@@ -464,7 +464,7 @@ class TestACOConditions:
         )
         # --- The action and the verdict ------------------------------------
         assert acs.most_likely() == CommitmentState.TRAJECTORY
-        assert acs.confidence >= 0.7  # C1 requires high confidence
+        assert acs.confidence > 0.7  # C1 requires confidence above 0.7
         assert formal_state != acs.most_likely()  # Divergence present
 
     # -----------------------------------------------------------------------
