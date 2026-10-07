@@ -52,7 +52,7 @@ READER'S NOTE — a module-level cache
 # ===========================================================================
 # STAGE MANAGEMENT (imports)
 # ---------------------------------------------------------------------------
-# pytest       parametrize, xfail.
+# pytest       parametrize.
 # cclf         Advisor, AuditTrail, CommitmentState, EscalationCondition,
 #              OperationalState, replay.
 # scenarios    SCENARIOS: name -> list of events.

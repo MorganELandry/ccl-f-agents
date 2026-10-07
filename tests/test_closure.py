@@ -66,7 +66,7 @@ READER'S NOTE — a fixture, `sv`
 # ===========================================================================
 # STAGE MANAGEMENT (imports)
 # ---------------------------------------------------------------------------
-# pytest       fixtures, parametrize, raises, xfail.
+# pytest       fixtures, parametrize, raises.
 # cclf         ClosureType, CommitmentState, EvidenceKind, SignalType,
 #              Supervisor, TransitionRefused.
 # stagehands   shared set-up helpers (see tests/stagehands.py):

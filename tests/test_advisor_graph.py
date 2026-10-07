@@ -54,7 +54,7 @@ READER'S NOTE — a closure as a fake
 # STAGE MANAGEMENT (imports)
 # ---------------------------------------------------------------------------
 # json      builds fake JSON replies.
-# pytest    fixtures, parametrize, monkeypatch, xfail.
+# pytest    fixtures, parametrize, monkeypatch.
 # cclf      Advisor, AuditTrail, CommitmentState, ExecutionClass,
 #           OperationalState, SignalType, Supervisor, build_graph, replay.
 # cclf.advisor   FALLBACK_STATE, FALLBACK_TYPE.

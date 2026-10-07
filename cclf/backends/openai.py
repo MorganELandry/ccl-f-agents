@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 # ===========================================================================
 # SCENE 1 — THE AUDITION
-# get_llm(): build an OpenAI chat model ready to answer the nodes
+# get_llm(): build an OpenAI chat model ready to answer the advisor
 # ===========================================================================
 
 def get_llm():
@@ -67,7 +67,7 @@ def get_llm():
 
     A missing API key is only logged as a warning here, not raised. The
     model object is still built; the failure then shows up when it is first
-    used, where nodes.py turns it into an error result.
+    used, where Advisor.propose() falls back to its conservative proposal.
     """
     # PLAYERS IN THIS SCENE
     #   ChatOpenAI   LangChain's OpenAI chat-model class (lazily imported)
@@ -93,8 +93,8 @@ def get_llm():
         logger.warning("[cclf-backend/openai] OPENAI_API_KEY not set.")
 
     # --- Build the model -----------------------------------------------------
-    # A low temperature (0.1) makes replies less random, which helps the
-    # nodes get consistent, parseable JSON.
+    # A low temperature (0.1) makes replies less random, so the
+    # advisor gets consistent, parseable JSON.
     return ChatOpenAI(
         model=model,
         temperature=0.1,

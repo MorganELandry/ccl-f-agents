@@ -53,17 +53,17 @@ READER'S NOTE — Settings
 # ===========================================================================
 # STAGE MANAGEMENT (imports)
 # ---------------------------------------------------------------------------
-# pytest       fixtures, parametrize, raises, xfail.
-# cclf         CommitmentState, EscalationCondition, ExecutionClass,
-#              OperationalState, SignalType, Supervisor, TransitionRefused.
+# pytest       fixtures, parametrize, raises.
+# cclf         CommitmentState, EscalationCondition, OperationalState,
+#              SignalType, Supervisor, TransitionRefused.
 # stagehands   CUST, TECH, PROCESS, to_review, decision.
 # ===========================================================================
 
 import pytest
 
 from cclf import (
-    CommitmentState, EscalationCondition, ExecutionClass, OperationalState, SignalType,
-    Supervisor, TransitionRefused,
+    CommitmentState, EscalationCondition, OperationalState, SignalType, Supervisor,
+    TransitionRefused,
 )
 from stagehands import CUST, PROCESS, TECH, decision, to_review
 

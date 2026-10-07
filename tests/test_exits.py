@@ -53,7 +53,7 @@ READER'S NOTE — building keyword arguments with a dict
 # ===========================================================================
 # STAGE MANAGEMENT (imports)
 # ---------------------------------------------------------------------------
-# pytest       fixtures, parametrize, raises, xfail.
+# pytest       fixtures, parametrize, raises.
 # cclf         CommitmentState, ExitType, LegalSubtype, SignalType,
 #              Supervisor, TransitionRefused.
 # stagehands   CUST, to_review, entries.

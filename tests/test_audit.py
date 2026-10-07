@@ -40,7 +40,7 @@ READER'S NOTE — dataclasses.replace
 # STAGE MANAGEMENT (imports)
 # ---------------------------------------------------------------------------
 # dataclasses.replace   forge altered copies of frozen entries.
-# pytest                fixtures, raises, xfail.
+# pytest                fixtures, raises.
 # cclf                  AuditTrail, SignalType, Supervisor.
 # cclf.audit            GENESIS, the prev_hash of the first entry.
 # stagehands            CUST, TECH, PROCESS, to_review, transitions.

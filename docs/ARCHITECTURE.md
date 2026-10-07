@@ -1,191 +1,163 @@
-# CCL-F Commitment Agent: Architecture Specification
+# Architecture
 
-**Project:** `cclf-agents`  
-**Framework:** CCL-F (Coordination Control Loop Framework) v0.2  
-**Stack:** Python · LangGraph · LangChain · OpenAI API  
-**Status:** Reference implementation
+This repository is a runtime monitor for the **Coordination Control Loop Framework (CCL-F), v0.2 working draft**. It implements the parts of the draft that a program can check from recorded facts:
 
----
+- the Layer 4 commitment state machine;
+- Layer 2 closure typing, escalation conditions and loop exits;
+- the Layer 4 coherence score and execution gates;
+- the Layer 0 architecture voids that can be detected from registered facts.
 
-## Purpose
+Where the draft leaves something open, the code makes a choice and labels it an implementation decision. Those choices are listed in [DECISIONS.md](DECISIONS.md). They are this project's reading of the draft, not claims the draft makes.
 
-This project implements the CCL-F commitment state machine as a LangGraph agentic workflow. It demonstrates how agentic AI infrastructure can enforce organizational safety properties — specifically, how to prevent catastrophic decisions that result from **commitment opacity**: the failure of known safety signals to convert into executable corrective action before irreversible consequences occur.
-
-Two worked scenarios are included (737 MAX MCAS and Therac-25). The same graph applies to any organizational domain.
-
----
-
-## Background: The CCL-F Framework
-
-CCL-F (Coordination Control Loop Framework) formalizes why organizations make catastrophic decisions despite possessing the information needed to avoid them. The core claim: commitment failure has **formal structure** that can be detected and interrupted before the point of irreversibility.
-
-The framework introduces four monotonically non-decreasing commitment states:
+## Components
 
 ```
-OPEN → TRAJECTORY → AUTHORITY → EXECUTION
+events (plain dicts) ──► graph.py (LangGraph)  interpret ─► apply ─► assess
+                                                  │           │         │
+                                             advisor.py       ▼         ▼
+                                             (proposes   supervisor.py  coherence
+                                              only)      ├ statemachine.py
+                                                         ├ types.py
+                                                         └ audit.py (hash chain)
 ```
 
-| State       | Meaning                                                        |
-|-------------|----------------------------------------------------------------|
-| OPEN        | Signals visible; no direction committed                        |
-| TRAJECTORY  | A direction is locked; alternatives deprioritized              |
-| AUTHORITY   | Decision authority has formally closed                         |
-| EXECUTION   | Resources deployed; reversal is operationally costly           |
+| Module | Role |
+|---|---|
+| `cclf/types.py` | The vocabulary: six signal types, five operational states, the commitment states, 14 exit types, four closure types, evidence kinds, referents, execution classes, nine escalation conditions. Records: `Signal`, `Evidence`, `ClosureRecord`, `ExitRecord`, `Decision`, `Architecture`. |
+| `cclf/statemachine.py` | The Layer 4 transition table, transcribed row by row, plus named reasons for blocked transitions, `exit_allowed()` and `reentry_allowed()`. |
+| `cclf/audit.py` | Append-only audit trail. Each entry holds the SHA-256 of the previous one, so editing, deleting or reordering any entry breaks `AuditTrail.verify()`. |
+| `cclf/supervisor.py` | The rule engine. Every state change goes through it, and every rule it enforces is labelled with the draft section it comes from. |
+| `cclf/advisor.py` | An optional language model that proposes a signal type and operational state for a free-text report (AI Applications: "AI as Coordination Signal Classifier"). It cannot register, close, classify or authorize anything, and its output never counts as evidence. |
+| `cclf/graph.py` | A three-node LangGraph pipeline that replays events through the supervisor. A refused operation is recorded as the outcome, so a replay continues. |
+| `cclf/observability.py` | Optional OpenTelemetry spans and metrics (see `observability/README.md`). |
 
-**Structurally blocked transitions** (enforced in code, not policy):
+The supervisor holds all state. The graph only orchestrates, and the model only proposes, so no safety rule depends on the model or on graph wiring.
 
-| Blocked                     | Reason                                          |
-|-----------------------------|-------------------------------------------------|
-| EXECUTION → TRAJECTORY      | Cannot unspend deployed resources               |
-| AUTHORITY → OPEN            | Authority closure is durable                    |
-| TRAJECTORY → OPEN           | Trajectory lock does not self-reverse           |
-| Any → skip a state          | Non-monotonic jumps disallowed                  |
-
-**ACO (Adversarial Commitment Opacity):** A failure mode in which the true commitment state is deliberately or structurally concealed from agents who need it to act safely. Boeing MCAS certification, VW Dieselgate, and Enron are historical ACO anchors.
-
----
-
-## System Architecture
+## Signal lifecycle (Layer 4)
 
 ```
-START
-  │
-  ▼
-┌─────────────────┐
-│ evidence_intake │  Score incoming evidence for novelty + independence
-└────────┬────────┘
-         │
-         ▼
-┌──────────────────┐
-│  acs_inference   │  LLM estimates hidden ACS probability distribution
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│  aco_detection   │  LLM checks for Adversarial Commitment Opacity
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────────┐
-│ transition_evaluation│  LLM proposes: advance / hold / escalate
-└────────┬─────────────┘
-         │
-         ▼
-┌──────────────────┐
-│ transition_guard │  Structural block (pure logic, NO LLM)
-└────────┬─────────┘
-         │
-    ┌────┴────────────────────────┐
-    │ ACO detected OR             │
-    │ transition proposed?        │
-    ├─ YES ──────────────────────►│
-    │                    ┌────────▼──────┐
-    │                    │ human_review  │  ← LangGraph interrupt point
-    │                    └────────┬──────┘
-    │                             │
-    └─ NO ─────────────────────── ┤
-                                  ▼
-                         ┌─────────────────┐
-                         │ apply_transition │
-                         └────────┬────────┘
-                              ┌───┴───────────────────┐
-                              │ should_terminate?      │
-                              ├─ YES ─────────────────►│
-                              │               ┌────────▼──┐
-                              │               │ terminate  │
-                              │               └────────────┘
-                              │                     │
-                              └─ NO ──► END of cycle
-                                        (caller streams the next
-                                         evidence batch; state persists
-                                         via the checkpointer)
+unregistered → registered → classified → under_review ─┬─► closed_evidence
+                                                        ├─► closed_authority
+                                                        ├─► closed_role_switch
+                                                        ├─► suppressed
+                                                        ├─► escalated
+                                                        └─► trajectory_lock (terminal)
+
+closed_* → under_review          reopen: new evidence, recurrence link, or (role switch) independent review
+suppressed → under_review        re-entry logged; the suppression stays on the record
+escalated → under_review         only after structural review documents a Rule 8 model update
+any open state → exited(type)    with that exit type's obligations
+exited → under_review            only where the exit type's re-entry rule allows
 ```
 
----
+Blocked, each with a named reason:
 
-## Node Inventory
+- closing a signal before it is classified or before review opens;
+- closing a suppressed signal without re-entry;
+- closing an escalated signal before structural review has documented a model update;
+- any move out of a closed state except back into review;
+- any move out of `trajectory_lock`.
 
-### 1. `evidence_intake`
-Scores each un-evaluated piece of evidence on:
-- **Novelty** (0–1): does this add new information beyond what's already seen?
-- **Independence** (0–1): does this come from a source independent of prior evidence?
+## Closure typing (Layer 2, Key Definitions)
 
-Evidence must clear **both** thresholds (≥ 0.5) to be admissible. This guard prevents the classic pattern where 20 "signals" are actually the same signal re-reported, inflating apparent consensus.
+`Supervisor.attempt_closure()` decides the closure type. The caller does not choose it.
 
-### 2. `acs_inference`
-Maintains a **probability distribution** over the four commitment states, inferred from admissible behavioral signals. The agent cannot observe ACS (Authority Commitment Signal) directly — it may be concealed. This node implements the hidden-state inference problem.
+| Closure | When |
+|---|---|
+| **Evidence** | Some attached evidence passes **Evidence Novelty** (it was not present at registration) and the **External Evidence Source** test (its kind is a primary document, direct measurement, formal verification or independent party, and its producer is not the process under evaluation). Model output, assertions and internal analysis never qualify. |
+| **Role switch** | The registrant closes their own signal while acting for the other referent (technical reality vs. customer, Rule 5.3) with nothing new. Reopening it needs an independent reviewer. |
+| **Authority** | Anything else that closes the signal: a decision without qualifying evidence. |
+| **Lock-in** | Recorded when an override of a failing irreversible gate latches open constraint signals into `trajectory_lock`. |
 
-### 3. `aco_detection`
-Checks three ACO conditions:
-- **C1:** Formal state diverges from inferred ACS estimate (high confidence)
-- **C2:** High-quality evidence is being systematically ignored
-- **C3:** Decision authority inaccessible while trajectory is locked
+If a signal has a registered closure authority and the closer is outside it, the closure is logged as an `ATTEMPTED_CLOSURE`, and the signal stays open. Adopting a frame (`adopt_frame`) is always an authority closure, and the signals it displaces are suppressed.
 
-Any condition triggers escalation to human review.
+## Escalation (Layer 2)
 
-### 4. `transition_evaluation`
-The LLM proposes `advance`, `hold`, or `escalate` based on:
-- Current commitment state
-- ACS estimate
-- Admissible evidence
-- ACO flag
+The nine escalation conditions each open a `StructuralReview`. Reviews are deduplicated per condition and scope. A review is resolved only with a documented Rule 8 model update, and an escalated signal returns to review only then.
 
-This node **proposes only** — it does not apply.
+| Condition | Trigger in this runtime |
+|---|---|
+| `recurrence_threshold` | A recurrence group reaches the threshold (D1, default 3) |
+| `off_envelope_or_containment` | A signal is classified off-envelope or containment |
+| `authority_closure_count` | An irreversible decision's signals have more authority closures than the threshold (D5, default 1) |
+| `role_switch_on_constraint` | A constraint signal is closed by role switch |
+| `lock_in_with_open_constraints` | An irreversible gate is overridden with constraint loops open |
+| `suppressed_before_execution` | An irreversible request is made over a suppressed signal; the review blocks that same request |
+| `framing_adopted_over_open_constraints` | A frame is adopted while it displaces open constraint signals |
+| `credibility_discounting` | A credibility discount is not supported by the target's track record (D7) |
+| `sender_discount_recurrence` | An unsupported discount brings the agent's discount count to the threshold (D6, default 3); the agent is placed under AP-G |
 
-### 5. `transition_guard` ⚠️
-**LLM-free by design.** Enforces the four structurally blocked transitions using pure logic. This is the safety-critical node: a probabilistic model must not be able to override a structural invariant.
+## Exits (Layer 2, Loop Exit Taxonomy)
 
-### 6. `human_review` (interrupt node)
-Human-in-the-loop checkpoint. Surfaces all relevant context to a human approver. In production, this is a LangGraph interrupt — the graph pauses, writes a checkpoint, and waits for an external resume signal (webhook, UI, approval queue). In CLI demo mode, uses stdin.
+All 14 exit types are supported. Their obligations are enforced:
 
-### 7. `apply_transition`
-Commits the transition only if: (a) guard passed, (b) human approved. Writes an immutable audit entry. Flags EXECUTION-state arrival for termination.
+- terminal, legal and key-person exits note the open loop state;
+- a delegated exit names a successor;
+- a whistleblower exit names the external pathway and the suppression event behind it;
+- a legal exit gives one of four sub-types.
 
-### 8. `terminate`
-Writes final audit summary and signals graph completion.
+Nine exit types leave the loop open (`EXIT_LEAVES_LOOP_OPEN`). An exited constraint of those types still blocks an irreversible gate. Re-entry follows the taxonomy:
 
----
+- stated for recoverable and delegated exits;
+- a successor is needed for forced and key-person exits;
+- a different agent is needed for a boundary exit;
+- inferred for exhaustion;
+- for legal exits, only a regulatory intervention or investigative hold, once lifted;
+- external for whistleblower;
+- none for terminal, superseded and timeout, which have no transition in the draft;
+- none for containment, deferred and ambiguity (D2).
 
-## Audit System
+## Coherence score (Layer 4)
 
-Every event produces an `AuditEntry` with:
-- **Hash-chained integrity**: each entry hashes its content + the previous entry's hash → tamper-evident chain
-- **Immutable sequence**: entries are append-only
-- **Full provenance**: from/to states, event type, payload, timestamp, agent reasoning
+The draft's five factors and provisional weights are used as given:
 
-This directly addresses the 737 MAX failure mode where audit trails were incomplete or post-hoc reconstructed.
+- open loops .30
+- classification stability .25
+- closure quality .20
+- recurrence pressure .15
+- authority compression .10
 
----
+The factor formulas are D3. Closure quality counts each reopen as a closure that did not hold.
 
-## Human-in-the-Loop Pattern
+## Execution gates (Layer 4)
 
-The CLI runs `human_review` inline: it prompts on stdin, or with `--no-hitl` records an explicit `AUTO-APPROVED` decision so the audit chain never shows an automatic decision as a human one.
+Requirements are cumulative across the three execution classes.
 
-A service deployment would instead pause before the node and resume once an external approver (webhook, UI, approval queue) has decided, using LangGraph's standard interrupt API:
+| Class | Requires |
+|---|---|
+| Routine | Every signal the decision depends on is registered |
+| Elevated | Plus: classification acknowledged; no open loop left merely registered |
+| Irreversible | Plus all of the following: <ul><li>no open constraint loops (counting exits that leave them open)</li><li>classification stabilized (D8)</li><li>recurrence groups reviewed</li><li>evidence closure ratio (D4)</li><li>no unresolved structural reviews</li><li>open off-envelope or containment signals resolved</li><li>coherence at or above the threshold (D3)</li><li>no Layer 0 void</li></ul> |
 
-```python
-graph = build_graph(interrupt_before_human=True, use_checkpointer=True)
-config = {"configurable": {"thread_id": "t1"}}
+**Rule 4 acceptance** is required for every class and cannot be overridden: an agent must explicitly accept authorization, risk and rationale.
 
-graph.invoke(initial_state, config)            # runs until it pauses before human_review
+Other gate failures can be overridden. An override:
 
-# External approval system records the decision on the checkpointed state...
-graph.update_state(config, {"human_approval": True,
-                            "human_rationale": "Approved by Safety Review Board",
-                            "human_reviewer": "safety-board-chair"})
-graph.invoke(None, config)                     # ...and resumes from the pause
-```
+- is logged with identity, rationale and time (`GATE_OVERRIDE`);
+- reports any architecture void;
+- on an irreversible decision, latches under-review constraints into `trajectory_lock` with a lock-in closure record and logs `OPEN_LOOP_IRREVERSIBLE_EXECUTION`.
 
-On resume, `human_review` finds the decision already written to state and uses it as recorded: it does not ask again, and unattended mode cannot override it. The audit entry records the reviewer and `decided_by: external`. A decision is cleared once used, and any unused decision is discarded at the start of the next cycle, so a decision can only ever answer the proposal it was given for.
+An executed irreversible decision cannot be executed again.
 
----
+## Layer 0 (Architecture Precondition)
 
-## Repo structure, running the demo
+`architecture_check()` reports the voids it can see from registered facts. It checks each constraint and anomaly signal's failure mode (D9):
 
-See the [README](../README.md).
+- **AP-A / AP.1:** no steward.
+- **AP.1b:** no successor.
+- **AP-F / AP.6:** every registered reporter is an interested party (a captured channel).
+- **AP-G:** the registrant is under sender discount.
+- **AP.2:** a registered channel has not been tested under load, so it is treated as absent.
 
----
+AP.3, AP.4, AP.5 and AP.8 need interviews or document review and are not checked.
 
-## Reference
+## Audit
 
-Landry, M. Coordination Control Loop Framework (CCL-F), v0.2 working draft (unpublished, 2026). CC BY-NC-ND 4.0.
+Every operation that changes state appends an entry with a logical clock time, the event, the actor and a payload. Payload enums are stored as their values. The runtime refuses an operation with no actor. `AuditTrail.verify()` recomputes the chain from the first entry onward.
+
+## What the runtime cannot do
+
+- **Read meaning.** It checks evidence by kind and producer, not by content. A restatement filed as a "direct measurement" by an independent party passes.
+- **Authenticate actors.** Names are recorded as given.
+- **Check AP.3, AP.4, AP.5 or AP.8.**
+- **Supply the thresholds.** The draft leaves them domain-configured; the defaults here (D1, D3–D6) are starting points.

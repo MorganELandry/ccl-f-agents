@@ -77,7 +77,7 @@ _DEFAULT_MODEL = "anthropic.claude-3-5-sonnet-20241022-v2:0"
 
 # ===========================================================================
 # SCENE 1 — THE AUDITION
-# get_llm(): build a Claude-on-AWS chat model ready to answer the nodes
+# get_llm(): build a Claude-on-AWS chat model ready to answer the advisor
 # ===========================================================================
 
 def get_llm():
@@ -118,7 +118,7 @@ def get_llm():
     # --- Build the model -----------------------------------------------------
     # Bedrock takes generation settings such as temperature inside
     # model_kwargs rather than as a top-level argument. A low temperature
-    # (0.1) makes replies less random, which helps the nodes get JSON.
+    # (0.1) makes replies less random, which helps the advisor get JSON.
     return ChatBedrock(
         model_id=model_id,
         region_name=region,

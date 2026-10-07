@@ -12,9 +12,8 @@ This is one of the four backends the registry in backends/__init__.py can
 choose from (CCLF_LLM_BACKEND=anthropic). Like every backend, it offers
 exactly one function, get_llm(), that returns a LangChain chat model.
 
-Claude's instruction-following on structured JSON output is stronger than
-GPT-4o-mini, which benefits the acs_inference and aco_detection nodes
-where the JSON schema must be precise.
+The advisor and the eval both ask for a JSON-only reply, so a low
+temperature is used to keep replies consistent and parseable.
 
 COMPLIANCE WARNING: Not suitable for PHI or hospital production use without
 an executed Anthropic BAA and architecture review. See COMPLIANCE.md.
@@ -58,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 # ===========================================================================
 # SCENE 1 — THE AUDITION
-# get_llm(): build a Claude chat model ready to answer the nodes
+# get_llm(): build a Claude chat model ready to answer the advisor
 # ===========================================================================
 
 def get_llm():
@@ -72,7 +71,7 @@ def get_llm():
 
     A missing API key is only logged as a warning here, not raised. The
     model object is still built; the failure then shows up when it is first
-    used, where nodes.py turns it into an error result.
+    used, where Advisor.propose() falls back to its conservative proposal.
     """
     # PLAYERS IN THIS SCENE
     #   ChatAnthropic   LangChain's Anthropic chat-model class (lazily imported)
@@ -97,8 +96,8 @@ def get_llm():
         logger.warning("[cclf-backend/anthropic] ANTHROPIC_API_KEY not set.")
 
     # --- Build the model -----------------------------------------------------
-    # A low temperature (0.1) makes replies less random, which helps the
-    # nodes get consistent, parseable JSON.
+    # A low temperature (0.1) makes replies less random, so the
+    # advisor gets consistent, parseable JSON.
     return ChatAnthropic(
         model=model,
         temperature=0.1,

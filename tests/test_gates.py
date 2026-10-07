@@ -54,7 +54,7 @@ THE PLAYBILL
 # ===========================================================================
 # STAGE MANAGEMENT (imports)
 # ---------------------------------------------------------------------------
-# pytest       fixtures, parametrize, raises, xfail.
+# pytest       fixtures, parametrize, raises.
 # cclf         Architecture, ClosureType, CommitmentState, ExecutionClass,
 #              ExitType, OperationalState, Settings, SignalType, Supervisor,
 #              TransitionRefused.

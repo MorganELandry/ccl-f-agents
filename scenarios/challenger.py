@@ -219,7 +219,7 @@ CHALLENGER: list[dict] = [
      "note": "the gate as it would have stood"},
     {"op": "request_execution", "decision_id": "launch-51L", "by": "kilminster",
      "override_rationale": "management decision to recommend launch",
-     "note": "Lock-in Closure: accumulated rigidity converted into a binding record"},
+     "note": "the override over open constraint loops (spec: Lock-in Closure)"},
 ]
 
 # EXEUNT — end of file.

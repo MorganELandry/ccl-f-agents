@@ -8,9 +8,10 @@ PROLOGUE
 The CCL-F LLM Backend Registry. It selects and returns the configured
 LLM backend at runtime.
 
-The LLM nodes in nodes.py need a chat model to talk to, but they should not
+The advisor (advisor.py) and the eval (evals/closure_pressure.py) need a
+chat model to talk to, but they should not
 care *which* company's model it is. This package is the casting office: the
-nodes ask for "an LLM" by calling get_llm(), and this file decides which
+callers ask for "an LLM" by calling get_llm(), and this file decides which
 provider plays the part, based on configuration.
 
 Backend is controlled by the CCLF_LLM_BACKEND environment variable:
@@ -65,7 +66,7 @@ READER'S NOTE — the registry pattern
     anthropic.py, azure.py, bedrock.py) offers a function with the same
     name and shape, get_llm(), so the caller never needs to know which one
     it got. Adding a provider means writing one more module with a
-    get_llm() and adding its name to the registry; nodes.py does not change.
+    get_llm() and adding its name to the registry; advisor.py does not change.
 
 READER'S NOTE — lazy imports
     Normally imports sit at the top of a file and run as soon as the file is

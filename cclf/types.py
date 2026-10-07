@@ -10,8 +10,6 @@ CCL-F v0.2 vocabulary as Python types.
 Every name here comes from the CCL-F v0.2 working draft (Layer 2, Layer 4
 and Key Definitions). Where the draft leaves a value open, the choice made
 here is recorded in docs/DECISIONS.md and marked "implementation decision".
-(Note: docs/DECISIONS.md is referenced throughout the code but is not yet
-present in this repository; the decision labels D1-D9 are used as tags.)
 
 This file holds no behaviour of its own beyond a few small read-only
 properties. It is the shared cast list: supervisor.py, statemachine.py,

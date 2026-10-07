@@ -2371,9 +2371,9 @@ class Supervisor:
             to trajectory_lock. Constraint loops open in any other state are
             reported as "still open" in the escalation and the log.
           - A suppressed signal at an irreversible request opens the
-            SUPPRESSED_BEFORE_EXECUTION review but adds no failure to this
-            request (the failure list is already built). Its open review
-            does block a later irreversible request on the same decision.
+            SUPPRESSED_BEFORE_EXECUTION review first, before the other
+            irreversible checks run, so that review's "unresolved
+            structural review" failure blocks this same request.
         """
         # PLAYERS IN THIS SCENE
         #   d                  the decision
