@@ -46,6 +46,9 @@ THE PLAYBILL
                                                                 parametrized, 2 runs)
     Scene 16  test_executed_decision_cannot_execute_again
     Scene 17  test_elevated_override_does_not_lock
+    Scene 18  test_evidence_for_unknown_signal_changes_nothing
+    Scene 19  test_suppressed_signal_blocks_the_first_irreversible_request
+    Scene 20  test_duplicate_decision_is_refused
 """
 
 # ===========================================================================
@@ -540,5 +543,75 @@ def test_elevated_override_does_not_lock(sv):
     assert result.permitted and result.overridden and result.locked_signals == []
     assert sv.signals["c"].state == S.UNDER_REVIEW
     assert entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION") == []
+
+
+# ===========================================================================
+# SCENE 18 — ALL OR NOTHING
+# Proves: evidence naming an unknown signal is refused whole; nothing is
+# stored, nothing is attached, and the clock does not move.
+# ===========================================================================
+
+def test_evidence_for_unknown_signal_changes_nothing(sv):
+    """
+    add_evidence with one good and one unknown signal id stores nothing.
+
+    Enter:   sv   fixture
+    Exit:    passes if TransitionRefused is raised, the evidence is absent,
+             the known signal has no evidence attached, and the audit trail
+             is the same length as before
+    """
+    # PLAYERS IN THIS SCENE
+    #   before   audit length before the failed call
+
+    to_review(sv, "c")
+    before = len(sv.audit.entries())
+    with pytest.raises(TransitionRefused):
+        add_ees(sv, "e1", signal_ids=["c", "no-such-signal"])
+    assert "e1" not in sv.evidence
+    assert sv.signals["c"].evidence_ids == []
+    assert len(sv.audit.entries()) == before
+
+
+# ===========================================================================
+# SCENE 19 — WHAT WAS HIDDEN BLOCKS AT ONCE
+# Proves: a suppressed signal escalates on the first irreversible request,
+# and that escalation's open review blocks the same request.
+# ===========================================================================
+
+def test_suppressed_signal_blocks_the_first_irreversible_request(sv):
+    """
+    The very first irreversible request over a suppressed signal is refused.
+
+    Enter:   sv   fixture
+    Exit:    passes if the gate refuses, and SUPPRESSED_BEFORE_EXECUTION
+             was escalated during that request
+    """
+    to_review(sv, "c")
+    sv.suppress("c", "program-manager", "out of scope for this flight")
+    decision(sv, "d", ["c"])
+    assert not sv.request_execution("d", "director").permitted
+    assert any("suppressed_before_execution" in str(e.payload)
+               for e in sv.audit.entries() if e.event.startswith("ESCALAT"))
+
+
+# ===========================================================================
+# SCENE 20 — ONE NAME, ONE DECISION
+# Proves: registering a second decision under an existing id is refused,
+# so an accepted decision cannot be silently replaced.
+# ===========================================================================
+
+def test_duplicate_decision_is_refused(sv):
+    """
+    register_decision with an id already in use raises.
+
+    Enter:   sv   fixture
+    Exit:    passes if TransitionRefused is raised and the original
+             decision (and its acceptance) is untouched
+    """
+    to_review(sv, "u", signal_type=SignalType.UNCERTAINTY)
+    first = decision(sv, "d", ["u"], X.ROUTINE)
+    with pytest.raises(TransitionRefused):
+        sv.register_decision("d", "replacement", X.ROUTINE, ["u"], "someone-else")
+    assert sv.decisions["d"] is first and first.accepted_by == "director"
 
 # EXEUNT — end of file.
