@@ -88,7 +88,8 @@ READER'S NOTE — checkpointer and interrupt_before
 # START, END       built-in markers for the entry and exit of a run.
 # MemorySaver      an in-memory checkpointer (see READER'S NOTE above).
 # CCLFAgentState   the shared state dataclass from types.py.
-# the eight nodes  the step functions from nodes.py, wired up in Scene 4.
+# _nodes           the nodes.py module; its eight step functions are looked
+#                  up on it inside build_graph() (Scene 4).
 # ===========================================================================
 
 from __future__ import annotations
@@ -98,16 +99,11 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from .types import CCLFAgentState
-from .nodes import (
-    evidence_intake,
-    acs_inference,
-    aco_detection,
-    transition_evaluation,
-    transition_guard,
-    human_review,
-    apply_transition,
-    terminate,
-)
+# The nodes module itself, not its functions. build_graph() looks each node
+# function up on this module at build time, so if observability.py has
+# swapped in traced wrappers (instrument_nodes), the graph runs the wrappers.
+# Importing the functions by name here would freeze the untraced originals.
+from . import nodes as _nodes
 
 
 # ===========================================================================
@@ -262,14 +258,16 @@ def build_graph(
     builder = StateGraph(CCLFAgentState)
 
     # --- Add all nodes: name each step and give its function ---------------
-    builder.add_node("evidence_intake",       evidence_intake)
-    builder.add_node("acs_inference",         acs_inference)
-    builder.add_node("aco_detection",         aco_detection)
-    builder.add_node("transition_evaluation", transition_evaluation)
-    builder.add_node("transition_guard",      transition_guard)
-    builder.add_node("human_review",          human_review)
-    builder.add_node("apply_transition",      apply_transition)
-    builder.add_node("terminate",             terminate)
+    # Each function is fetched from the nodes module *now*, at build time,
+    # so any wrapper installed by observability.instrument_nodes() is used.
+    builder.add_node("evidence_intake",       _nodes.evidence_intake)
+    builder.add_node("acs_inference",         _nodes.acs_inference)
+    builder.add_node("aco_detection",         _nodes.aco_detection)
+    builder.add_node("transition_evaluation", _nodes.transition_evaluation)
+    builder.add_node("transition_guard",      _nodes.transition_guard)
+    builder.add_node("human_review",          _nodes.human_review)
+    builder.add_node("apply_transition",      _nodes.apply_transition)
+    builder.add_node("terminate",             _nodes.terminate)
 
     # --- Linear edges: the fixed opening sequence ------------------------
     builder.add_edge(START,                    "evidence_intake")

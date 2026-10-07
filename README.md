@@ -61,7 +61,7 @@ python run_demo.py therac25           # Therac-25, both passes
 python run_demo.py therac25 --pass1-only
 python run_demo.py mcas --no-hitl     # unattended; approvals logged as AUTO-APPROVED
 
-pytest tests/ -v                      # 58 tests, no API key needed
+pytest tests/ -v                      # 60 tests, no API key needed
 ```
 
 Without credentials the demo still runs end to end: LLM nodes degrade to empty results, no transition is proposed, and the state stays at OPEN.

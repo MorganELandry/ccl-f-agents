@@ -545,19 +545,17 @@ def main():
 
     # Observability setup — must happen before build_graph()
     # --- Observability: set up OTel and wrap the node functions ------------
-    # Note: cclf/observability.py reads CCLF_OBSERVABILITY_ENABLED once, when
-    # it is first imported (at the top of this file). So the assignment
-    # below comes too late to change that module's _ENABLED switch; setup()
-    # still falls back to no-op on its own if the OTel packages are missing.
-    # The status line printed below says "disabled" whenever --no-obs is given.
+    # --no-obs turns the switch off here; setup() reads it when it runs, so
+    # setting it after observability.py was imported still takes effect.
+    # setup() also falls back to no-op on its own if the OTel packages are
+    # missing.
     if args.no_obs:
         os.environ["CCLF_OBSERVABILITY_ENABLED"] = "false"
     instrumentor = get_instrumentor()
     instrumentor.setup()
-    # Replaces the functions in cclf.nodes with wrapped versions. graph.py
-    # imported its own references to the node functions earlier, so the
-    # compiled graph uses the originals; the late `terminate` import below
-    # picks up the wrapped one.
+    # Replaces the functions in cclf.nodes with traced wrappers. This must
+    # happen before build_graph(): the graph looks each node up on the
+    # cclf.nodes module when it is built, so it picks up the wrappers.
     instrument_nodes(cclf_nodes, instrumentor)
 
     obs_endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")

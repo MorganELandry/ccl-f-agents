@@ -119,7 +119,8 @@ READER'S NOTE — the no-op fallback (why nothing breaks without OTel)
     real span. So the agent runs exactly the same, it just reports nothing.
     The same thing happens if setup() itself raises any exception: it logs a
     warning and resets to the not-ready state.
-    Note that _ENABLED is read once, when this module is first imported.
+    setup() re-reads CCLF_OBSERVABILITY_ENABLED when it runs, so the switch
+    can be flipped after import (run_demo.py --no-obs does this).
     Changing the environment variable after that does not change it.
 
 READER'S NOTE — decorators, closures and functools.wraps
@@ -220,7 +221,8 @@ logger = logging.getLogger(__name__)
 
 # _ENABLED — the master on/off switch, True unless CCLF_OBSERVABILITY_ENABLED
 #   is set to something other than "true" (case is ignored by .lower()).
-#   Read ONCE, at import time. Setting the variable later has no effect.
+#   This is the import-time default; setup() re-reads the variable when it
+#   runs, so setting it later (as run_demo.py --no-obs does) still works.
 _ENABLED = os.environ.get("CCLF_OBSERVABILITY_ENABLED", "true").lower() == "true"
 
 # _SERVICE — the service name stamped on every span, metric and log.
@@ -333,7 +335,11 @@ class CCLFInstrumentor:
             return
 
         # --- Switched off by the environment ------------------------------
-        if not _ENABLED:
+        # Read the switch now, not only at import: run_demo.py --no-obs sets
+        # CCLF_OBSERVABILITY_ENABLED=false after this module is imported.
+        # _ENABLED (the import-time value) still applies if the variable is unset.
+        if os.environ.get("CCLF_OBSERVABILITY_ENABLED",
+                          "true" if _ENABLED else "false").lower() != "true":
             logger.info("[cclf-obs] Observability disabled (CCLF_OBSERVABILITY_ENABLED=false)")
             return
 
@@ -882,12 +888,11 @@ def instrument_nodes(nodes_module, instrumentor: CCLFInstrumentor) -> None:
 
     "Monkey-patching" means replacing an attribute of a module or object at
     run time. It changes what `nodes_module.<name>` refers to from now on.
-    It does NOT change references that other modules already copied. In
-    this repo, cclf/graph.py does `from .nodes import evidence_intake, ...`
-    when cclf is first imported, so build_graph() still uses those original,
-    unwrapped functions; code that looks the name up on the module later
-    (such as run_demo.py's `from cclf.nodes import terminate`) gets the
-    wrapped one. Calling this twice would wrap the wrappers a second time.
+    It does NOT change references that other modules already copied with
+    `from module import name`. That is why cclf/graph.py looks each node up
+    on the nodes module inside build_graph(): call instrument_nodes() first,
+    then build_graph(), and the graph runs the traced wrappers. Calling this
+    twice would wrap the wrappers a second time.
     """
     # PLAYERS IN THIS SCENE
     #   node_names  the eight node function names to wrap
