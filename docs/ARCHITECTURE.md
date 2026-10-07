@@ -85,7 +85,7 @@ The nine escalation conditions each open a `StructuralReview`. Reviews are dedup
 | `suppressed_before_execution` | An irreversible request is made over a suppressed signal; the review blocks that same request |
 | `framing_adopted_over_open_constraints` | A frame is adopted while it displaces open constraint signals |
 | `credibility_discounting` | A credibility discount is not supported by the target's track record (D7) |
-| `sender_discount_recurrence` | An unsupported discount brings the agent's discount count to the threshold (D6, default 3); the agent is placed under AP-G |
+| `sender_discount_recurrence` | The agent's third unsupported discount (D6); discounts earned by a declining accuracy record do not count. The agent is placed under AP-G |
 
 ## Exits (Layer 2, Loop Exit Taxonomy)
 
@@ -94,7 +94,8 @@ All 14 exit types are supported. Their obligations are enforced:
 - terminal, legal and key-person exits note the open loop state;
 - a delegated exit names a successor;
 - a whistleblower exit names the external pathway and the suppression event behind it;
-- a legal exit gives one of four sub-types.
+- a legal exit gives one of four sub-types;
+- a containment, deferred or ambiguity exit can register a resolution condition: what the loop is waiting for.
 
 Nine exit types leave the loop open (`EXIT_LEAVES_LOOP_OPEN`). An exited constraint of those types still blocks an irreversible gate. Re-entry follows the taxonomy:
 
@@ -105,7 +106,7 @@ Nine exit types leave the loop open (`EXIT_LEAVES_LOOP_OPEN`). An exited constra
 - for legal exits, only a regulatory intervention or investigative hold, once lifted;
 - refused here for whistleblower, which continues in an external process;
 - none for terminal, superseded and timeout, which have no transition in the draft;
-- none for containment, deferred and ambiguity (D2).
+- for containment, deferred and ambiguity, only when the resolution condition registered at exit is met (D2); with none registered, never, and the concern is re-registered as a new linked signal.
 
 ## Coherence score (Layer 4)
 

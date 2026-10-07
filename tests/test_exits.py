@@ -24,8 +24,9 @@ survive the exit and whether the loop may be re-entered:
     stated      recoverable, delegated
     inferred    forced, exhaustion, boundary, key person
     none        terminal, superseded, timeout
-    unspecified containment, deferred, ambiguity (a spec gap; the code's
-                choice D2 is "no re-entry, register a new linked signal")
+    on condition containment, deferred, ambiguity: re-enter when the
+                resolution condition registered at exit is met; with none
+                registered, no re-entry (re-register as a new linked signal)
     external    whistleblower (re-entered through external jurisdiction)
     legal       depends on sub-type: regulatory intervention / investigative
                 hold may resume when lifted
@@ -38,7 +39,7 @@ THE PLAYBILL
     Scene 5   test_legal_exit_requires_sub_type
     Scene 6   test_only_open_signals_can_exit
     Scene 7   test_reentry_by_exit_type                    (parametrized, 13 runs)
-    Scene 8   test_open_ended_exits_have_no_reentry        (impl. decision D2)
+    Scene 8   test_waiting_exits_reenter_on_their_condition (parametrized, 3 x 3 runs)
     Scene 9   test_legal_exit_resumes_only_when_lifted     (parametrized, 2 runs)
     Scene 10  test_statutory_trigger_does_not_resume       (was a spec mismatch; now fixed)
     Scene 11  test_successor_reentry_needs_a_successor     (was a spec mismatch; now fixed)
@@ -307,24 +308,44 @@ def test_reentry_by_exit_type(sv, exit_type):
 
 
 # ===========================================================================
-# SCENE 8 — THE SPEC'S OWN GAP
-# Proves (implementation decision D2): containment, deferred and ambiguity
-# exits have no re-entry, and the refusal says why.
+# SCENE 8 — WAITING FOR A NAMED CONDITION
+# Proves: Layer 4 exit transitions and Layer 2 exit obligations —
+# containment, deferred and ambiguity exits re-enter review only when the
+# resolution condition registered at exit is met; with no condition
+# registered they never re-enter, and the refusal points to a new linked
+# signal. (Parametrized: three exit types x three cases.)
 # ===========================================================================
 
-def test_open_ended_exits_have_no_reentry(sv):
+@pytest.mark.parametrize("exit_type", [X.CONTAINMENT, X.DEFERRED, X.AMBIGUITY],
+                         ids=lambda x: x.value)
+@pytest.mark.parametrize("condition, met, returns", [
+    (None, True, False),                    # nothing registered: never
+    ("supplier test report received", False, False),   # registered, not met
+    ("supplier test report received", True, True),     # registered and met
+], ids=["no-condition", "not-met", "met"])
+def test_waiting_exits_reenter_on_their_condition(sv, exit_type, condition, met, returns):
     """
-    Implementation-decision test (D2). The spec lists these three as
-    "[no transition specified]" and calls it "a genuine specification gap"
-    (lines 906-911). The code refuses re-entry and points to re-registering
-    as a new linked signal; the refusal reason must name D2.
+    reenter() succeeds only with a registered condition that is met.
 
-    Enter:   sv   fixture
-    Exit:    passes if the refusal message mentions D2
+    Enter:   sv          fixture
+             exit_type   containment, deferred or ambiguity
+             condition   the resolution condition registered at exit, or None
+             met         what the re-entering agent states
+             returns     whether the signal should come back to review
+    Exit:    passes if the outcome matches `returns`; a successful re-entry
+             logs the condition it answered
     """
-    do_exit(sv, X.DEFERRED)
-    with pytest.raises(TransitionRefused, match="D2"):
-        sv.reenter("c", "steward", "conditions now exist")
+    sv.exit("c", exit_type, "steward", f"{exit_type.value} exit",
+            resolution_condition=condition)
+    if returns:
+        sv.reenter("c", "steward", "condition met", condition_met=met)
+        assert sv.signals["c"].state == S.UNDER_REVIEW
+        assert entries(sv, "REENTRY")[0].payload["resolution_condition"] == condition
+    else:
+        match = "new signal" if condition is None else "not yet met"
+        with pytest.raises(TransitionRefused, match=match):
+            sv.reenter("c", "steward", "trying to come back", condition_met=met)
+        assert sv.signals["c"].state == S.EXITED
 
 
 # ===========================================================================

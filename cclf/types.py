@@ -501,6 +501,10 @@ class ExitRecord:
       suppression_ref   for whistleblower exits, the suppression event that
                         triggered it
       legal_subtype     for legal exits, which LegalSubtype applies
+      resolution_condition  for containment, deferred and ambiguity exits,
+                        what the loop is waiting for: "the loop re-enters
+                        review when that condition is met"; without one it
+                        has no re-entry path (Layer 2, Exit obligations)
     """
     signal_id: str
     exit_type: ExitType
@@ -512,6 +516,7 @@ class ExitRecord:
     external_pathway: Optional[str] = None
     suppression_ref: Optional[str] = None
     legal_subtype: Optional[LegalSubtype] = None
+    resolution_condition: Optional[str] = None
 
 
 # ===========================================================================

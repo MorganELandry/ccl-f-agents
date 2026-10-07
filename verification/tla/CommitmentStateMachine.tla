@@ -60,6 +60,7 @@ ExitTypes == {"terminal", "containment", "recoverable", "superseded", "delegated
 ReentryStated         == {"recoverable", "delegated"}
 ReentryNeedsSuccessor == {"forced", "key_person"}            \* inferred from AP.1b
 ReentryInferredFree   == {"exhaustion"}                      \* inferred, no condition
+WaitingExits          == {"containment", "deferred", "ambiguity"} \* on a registered condition
 \* boundary: inferred, needs a different agent; legal: sub-type and lifted.
 
 LegalSubtypes  == {"regulatory_intervention", "judicial_order",
@@ -89,18 +90,20 @@ Transitions ==
 (*   state[s]        commitment state of signal s                          *)
 (*   exitType[s]     its exit type once exited, else "none"                *)
 (*   legal[s]        its legal sub-type for a legal exit, else "none"      *)
+(*   cond[s]         a resolution condition was registered at its exit     *)
 (*   modelUpdate[s]  a Rule 8 model update has been documented for it      *)
 (*   accepted        Rule 4 acceptance given for the decision              *)
 (*   executed        the irreversible decision has executed                *)
 (*   log             the audit log: a sequence of records                  *)
 (***************************************************************************)
-VARIABLES state, exitType, legal, modelUpdate, accepted, executed, log
+VARIABLES state, exitType, legal, cond, modelUpdate, accepted, executed, log
 
-vars == <<state, exitType, legal, modelUpdate, accepted, executed, log>>
+vars == <<state, exitType, legal, cond, modelUpdate, accepted, executed, log>>
 
 Init == /\ state       = [s \in Signals |-> "unregistered"]
         /\ exitType    = [s \in Signals |-> "none"]
         /\ legal       = [s \in Signals |-> "none"]
+        /\ cond        = [s \in Signals |-> FALSE]
         /\ modelUpdate = [s \in Signals |-> FALSE]
         /\ accepted    = FALSE
         /\ executed    = FALSE
@@ -124,7 +127,7 @@ Move(s, t) ==
   /\ state[s] /= "escalated"           \* recovery: see Recover
   /\ state' = [state EXCEPT ![s] = t]
   /\ Log(Rec("transition", s, state[s], t))
-  /\ UNCHANGED <<exitType, legal, modelUpdate, accepted, executed>>
+  /\ UNCHANGED <<exitType, legal, cond, modelUpdate, accepted, executed>>
 
 \* "A closed loop cannot be silently reopened": the reopen is its own
 \* logged record (rationale, reopening agent, superseded closure).
@@ -133,7 +136,7 @@ Reopen(s) ==
   /\ <<state[s], "under_review">> \in Transitions
   /\ state' = [state EXCEPT ![s] = "under_review"]
   /\ Log(Rec("reopen", s, state[s], "under_review"))
-  /\ UNCHANGED <<exitType, legal, modelUpdate, accepted, executed>>
+  /\ UNCHANGED <<exitType, legal, cond, modelUpdate, accepted, executed>>
 
 \* Rule 8: structural review documents a model update.
 DocumentModelUpdate(s) ==
@@ -141,7 +144,7 @@ DocumentModelUpdate(s) ==
   /\ ~modelUpdate[s]
   /\ modelUpdate' = [modelUpdate EXCEPT ![s] = TRUE]
   /\ Log(Rec("model_update", s, "escalated", "escalated"))
-  /\ UNCHANGED <<state, exitType, legal, accepted, executed>>
+  /\ UNCHANGED <<state, exitType, legal, cond, accepted, executed>>
 
 \* escalated -> under_review, only once the model update is on record.
 Recover(s) ==
@@ -151,36 +154,45 @@ Recover(s) ==
   /\ state' = [state EXCEPT ![s] = "under_review"]
   /\ modelUpdate' = [modelUpdate EXCEPT ![s] = FALSE]
   /\ Log(Rec("transition", s, "escalated", "under_review"))
-  /\ UNCHANGED <<exitType, legal, accepted, executed>>
+  /\ UNCHANGED <<exitType, legal, cond, accepted, executed>>
 
-\* any open state -> exited(type). A legal exit records its sub-type.
-Exit(s, x, sub) ==
+\* any open state -> exited(type). A legal exit records its sub-type; a
+\* containment, deferred or ambiguity exit may register a resolution
+\* condition (c), and no other exit type does.
+Exit(s, x, sub, c) ==
   /\ state[s] \in OpenStates
   /\ (x = "legal") = (sub /= "none")
+  /\ c => x \in WaitingExits
   /\ state'    = [state    EXCEPT ![s] = "exited"]
   /\ exitType' = [exitType EXCEPT ![s] = x]
   /\ legal'    = [legal    EXCEPT ![s] = sub]
+  /\ cond'     = [cond     EXCEPT ![s] = c]
   /\ Log(Rec("exit", s, state[s], x))
   /\ UNCHANGED <<modelUpdate, accepted, executed>>
 
 \* May an exit of type x (legal sub-type sub) re-enter, given whether a
-\* successor is registered, the resumer differs, and a legal hold is lifted?
-ReentryAllowed(x, sub, hasSuccessor, resumerDiffers, lifted) ==
+\* successor is registered, the resumer differs, a legal hold is lifted,
+\* a resolution condition was registered, and it is met?
+ReentryAllowed(x, sub, hasSuccessor, resumerDiffers, lifted, hasCond, met) ==
   \/ x \in ReentryStated
   \/ x \in ReentryNeedsSuccessor /\ hasSuccessor
   \/ x \in ReentryInferredFree
   \/ x = "boundary" /\ resumerDiffers
   \/ x = "legal" /\ sub \in LegalResumable /\ lifted
+  \/ x \in WaitingExits /\ hasCond /\ met
 
-\* exited -> under_review. The three conditions are chosen freely by TLC
-\* (\E ... \in BOOLEAN), so every combination is explored.
+\* exited -> under_review. The outside conditions are chosen freely by TLC
+\* (\E ... \in BOOLEAN), so every combination is explored; whether a
+\* resolution condition was registered comes from the exit itself.
 Reenter(s) ==
-  \E hasSuccessor, resumerDiffers, lifted \in BOOLEAN :
+  \E hasSuccessor, resumerDiffers, lifted, met \in BOOLEAN :
     /\ state[s] = "exited"
-    /\ ReentryAllowed(exitType[s], legal[s], hasSuccessor, resumerDiffers, lifted)
+    /\ ReentryAllowed(exitType[s], legal[s], hasSuccessor, resumerDiffers, lifted,
+                      cond[s], met)
     /\ state'    = [state    EXCEPT ![s] = "under_review"]
     /\ exitType' = [exitType EXCEPT ![s] = "none"]
     /\ legal'    = [legal    EXCEPT ![s] = "none"]
+    /\ cond'     = [cond     EXCEPT ![s] = FALSE]
     /\ Log(Rec("reentry", s, "exited", "under_review"))
     /\ UNCHANGED <<modelUpdate, accepted, executed>>
 
@@ -189,7 +201,7 @@ Accept ==
   /\ ~accepted
   /\ accepted' = TRUE
   /\ Log(Rec("acceptance", "none", "none", "none"))
-  /\ UNCHANGED <<state, exitType, legal, modelUpdate, executed>>
+  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, executed>>
 
 \* Exits whose "Loop State After" leaves the loop open.
 LeavesOpen == {"containment", "recoverable", "delegated", "deferred", "forced",
@@ -207,7 +219,7 @@ Execute ==
   /\ accepted /\ ~executed /\ GateOK
   /\ executed' = TRUE
   /\ Log(Rec("execution_permitted", "none", "none", "none"))
-  /\ UNCHANGED <<state, exitType, legal, modelUpdate, accepted>>
+  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, accepted>>
 
 \* Override: accepted, the gate fails, the override is logged, and every
 \* signal under review is latched into trajectory_lock (lock-in closure).
@@ -220,13 +232,14 @@ Override ==
                  IF state[s] = "under_review" THEN "trajectory_lock" ELSE state[s]]
   /\ log' = log \o << Rec("gate_override", "none", "none", "none"),
                       Rec("open_loop_irreversible_execution", "none", "none", "none") >>
-  /\ UNCHANGED <<exitType, legal, modelUpdate, accepted>>
+  /\ UNCHANGED <<exitType, legal, cond, modelUpdate, accepted>>
 
 Next ==
   /\ Len(log) < MaxLog
   /\ \/ \E s \in Signals, t \in States : Move(s, t)
      \/ \E s \in Signals : Reopen(s) \/ DocumentModelUpdate(s) \/ Recover(s) \/ Reenter(s)
-     \/ \E s \in Signals, x \in ExitTypes, sub \in LegalSubtypes \cup {"none"} : Exit(s, x, sub)
+     \/ \E s \in Signals, x \in ExitTypes, sub \in LegalSubtypes \cup {"none"}, c \in BOOLEAN :
+          Exit(s, x, sub, c)
      \/ Accept \/ Execute \/ Override
 
 (***************************************************************************)
@@ -239,6 +252,7 @@ TypeOK ==
   /\ state \in [Signals -> States]
   /\ exitType \in [Signals -> ExitTypes \cup {"none"}]
   /\ legal \in [Signals -> LegalSubtypes \cup {"none"}]
+  /\ cond \in [Signals -> BOOLEAN]
   /\ modelUpdate \in [Signals -> BOOLEAN]
   /\ accepted \in BOOLEAN /\ executed \in BOOLEAN
 
@@ -274,13 +288,18 @@ TrajectoryLockTerminal ==
   [][\A s \in Signals : state[s] = "trajectory_lock" => state'[s] = "trajectory_lock"]_vars
 
 \* Exits with no re-entry in the spec never come back: terminal, superseded,
-\* timeout (no transition), containment/deferred/ambiguity (D2),
-\* whistleblower (external process).
-NoReentryTypes == {"terminal", "superseded", "timeout", "containment",
-                   "deferred", "ambiguity", "whistleblower"}
+\* timeout (no transition), whistleblower (external process).
+NoReentryTypes == {"terminal", "superseded", "timeout", "whistleblower"}
 NoForbiddenReentry ==
   [][\A s \in Signals :
        (state[s] = "exited" /\ exitType[s] \in NoReentryTypes) => state'[s] = "exited"]_vars
+
+\* Containment, deferred and ambiguity exits with no resolution condition
+\* registered at exit never come back (re-register as a new linked signal).
+NoWaitingReentryWithoutCondition ==
+  [][\A s \in Signals :
+       (state[s] = "exited" /\ exitType[s] \in WaitingExits /\ ~cond[s])
+         => state'[s] = "exited"]_vars
 
 \* A judicial order or statutory trigger never resumes to review.
 NoLegalReentryWithoutResumableSubtype ==

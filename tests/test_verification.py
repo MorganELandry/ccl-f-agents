@@ -196,34 +196,42 @@ def test_tla_reentry_rule_matches_code():
     Evaluate the model's ReentryAllowed in Python and compare with the code.
 
     Enter:   (nothing)
-    Exit:    passes if they agree in all 136 cases (13 non-legal exit types
-             x 8 condition combinations, plus 4 legal sub-types x 8)
+    Exit:    passes if they agree in all 544 cases: (13 non-legal exit types
+             + 4 legal sub-types) x 32 combinations of the five conditions
 
     The model's rule is short enough to restate here from the sets read
     out of the file; the sets, not this restatement, are what could drift.
     """
     # PLAYERS IN THIS SCENE
-    #   stated, needs_succ, free, resumable   the model's sets
-    #   x, sub, succ, differs, lifted         one case
+    #   stated, needs_succ, free, resumable,  the model's sets
+    #     waiting
+    #   x, sub, succ, differs, lifted,        one case
+    #     has_cond, met
     #   model, code                           the two answers
 
     stated = tla_set("ReentryStated")
     needs_succ = tla_set("ReentryNeedsSuccessor")
     free = tla_set("ReentryInferredFree")
     resumable = tla_set("LegalResumable")
+    waiting = tla_set("WaitingExits")
     subtypes = [None] + list(LegalSubtype)
-    for x, sub, succ, differs, lifted in itertools.product(
-            ExitType, subtypes, [False, True], [False, True], [False, True]):
+    # [[False, True]] * 5 is a list of five [False, True] lists; the leading
+    # * spreads them out as five separate arguments, so product() yields
+    # every combination of the five yes/no conditions (2**5 = 32).
+    for x, sub, succ, differs, lifted, has_cond, met in itertools.product(
+            ExitType, subtypes, *[[False, True]] * 5):
         if (x == ExitType.LEGAL) != (sub is not None):
             continue  # the model only pairs a sub-type with a legal exit
         model = (x.value in stated
                  or (x.value in needs_succ and succ)
                  or x.value in free
                  or (x.value == "boundary" and differs)
-                 or (x.value == "legal" and sub.value in resumable and lifted))
+                 or (x.value == "legal" and sub.value in resumable and lifted)
+                 or (x.value in waiting and has_cond and met))
         code, _ = reentry_allowed(x, legal_resumes=lifted, legal_subtype=sub,
-                                  has_successor=succ, resumer_differs=differs)
-        assert model == code, (x, sub, succ, differs, lifted)
+                                  has_successor=succ, resumer_differs=differs,
+                                  has_condition=has_cond, condition_met=met)
+        assert model == code, (x, sub, succ, differs, lifted, has_cond, met)
 
 
 # ===========================================================================

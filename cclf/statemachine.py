@@ -121,10 +121,11 @@ LEGAL_RESUMABLE = frozenset({L.REGULATORY_INTERVENTION, L.INVESTIGATIVE_HOLD})
 #   timeout). Not read by reentry_allowed(): these simply fall through to its
 #   final "terminal exit" refusal. Kept as documentation of the spec group.
 NO_REENTRY = frozenset({X.TERMINAL, X.SUPERSEDED, X.TIMEOUT})
-# OPEN_ENDED — exits marked "[no transition specified]"; the spec calls this
-#   "a genuine specification gap".
-# v0.2 Exit Checklist leaves these open; implementation decision D2: no
-# automatic re-entry, re-register as a new linked signal instead.
+# OPEN_ENDED — containment, deferred and ambiguity: open exits that re-enter
+#   "when the resolution condition registered at exit is met"; with no
+#   condition registered, none of the three re-enters and the concern is
+#   re-registered as a new linked signal (Layer 4 exit transitions; this
+#   closed the former 0.2 Exit Checklist gap, October 2026).
 OPEN_ENDED = frozenset({X.CONTAINMENT, X.DEFERRED, X.AMBIGUITY})
 # EXTERNAL — exits that go to "[external process]", not back into this
 #   automaton.
@@ -217,12 +218,16 @@ def exit_allowed(current: S) -> tuple[bool, str]:
 
 def reentry_allowed(exit_type: X, legal_resumes: Optional[bool] = None,
                     legal_subtype: Optional[L] = None, has_successor: bool = False,
-                    resumer_differs: bool = True) -> tuple[bool, str]:
+                    resumer_differs: bool = True, has_condition: bool = False,
+                    condition_met: bool = False) -> tuple[bool, str]:
     """
     May an exited signal of this type return to under_review?
 
       has_successor    a successor steward is registered (forced / key person)
       resumer_differs  the resuming agent is not the one who hit the boundary
+      has_condition    a resolution condition was registered at exit
+                       (containment / deferred / ambiguity)
+      condition_met    the re-entering agent states that condition is met
 
     Enter:   exit_type        the ExitType the signal left by
              legal_resumes    for legal exits: has the external authority
@@ -230,6 +235,8 @@ def reentry_allowed(exit_type: X, legal_resumes: Optional[bool] = None,
              legal_subtype    for legal exits: which LegalSubtype
              has_successor    see above
              resumer_differs  see above
+             has_condition    see above
+             condition_met    see above
     Exit:    (allowed, reason)
 
     The checks run in order and the first match wins, following the spec's
@@ -240,7 +247,9 @@ def reentry_allowed(exit_type: X, legal_resumes: Optional[bool] = None,
       4. other inferred re-entries                        -> allowed
       5. legal: only resumable sub-types, only when lifted
       6. whistleblower                                    -> external process
-      7. containment / deferred / ambiguity               -> blocked (D2)
+      7. containment / deferred / ambiguity               -> allowed only when
+                                                             a condition was
+                                                             registered and is met
       8. anything left (terminal, superseded, timeout)    -> blocked
     Steps 2 and 3 come before step 4 so their extra conditions are enforced
     before the general "inferred re-entry" permission.
@@ -271,10 +280,14 @@ def reentry_allowed(exit_type: X, legal_resumes: Optional[bool] = None,
     # --- 6. Whistleblower: re-enters elsewhere, not here --------------------
     if exit_type in EXTERNAL:
         return False, "BLOCKED: whistleblower exits re-enter through external jurisdiction"
-    # --- 7. Open-ended exits: spec gap, implementation decision D2 ----------
+    # --- 7. Open exits waiting on a registered resolution condition --------
     if exit_type in OPEN_ENDED:
-        return False, ("BLOCKED: no re-entry transition is specified for this exit "
-                       "(implementation decision D2: re-register as a new linked signal)")
+        if not has_condition:
+            return False, ("BLOCKED: no resolution condition was registered at exit; "
+                           "re-register the concern as a new signal linked to this one")
+        if not condition_met:
+            return False, "BLOCKED: the resolution condition registered at exit is not yet met"
+        return True, "resolution condition registered at exit is met"
     # --- 8. Terminal, superseded, timeout -----------------------------------
     return False, "BLOCKED: terminal exit; no re-entry"
 

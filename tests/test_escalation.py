@@ -1,6 +1,6 @@
 """
 THE NINE ALARMS
-A Play in Seventeen Scenes
+A Play in Eighteen Scenes
 =========================
 
 PROLOGUE
@@ -44,6 +44,7 @@ THE PLAYBILL
     Scene 16  test_signal_held_by_two_reviews_waits_for_both
     Scene 17  test_recovery_only_through_model_update        (was a spec mismatch, now fixed;
                                                               parametrized, 2 runs)
+    Scene 18  test_earned_discounts_do_not_count_toward_ap_g
 
 READER'S NOTE — Settings
     Supervisor(Settings(...)) changes a threshold for one supervisor only.
@@ -340,8 +341,8 @@ def test_credibility_discounting_escalates_only_for_accurate_senders(sv):
 
 def test_sender_discount_recurrence_is_ap_g(sv):
     """
-    Implementation-decision test (D6: sender-discount threshold 3,
-    "provisionally mirroring Rule 7"). The third discount opens
+    The draft's AP-G threshold (Layer 2, "AP-G threshold": three; D6 is
+    the Settings value that holds it). The third discount opens
     SENDER_DISCOUNT_RECURRENCE, and a gate over that sender's constraint
     reports an AP-G void.
 
@@ -531,5 +532,42 @@ def test_recovery_only_through_model_update(sv, call):
     moves = [(e.payload["from"], e.payload["to"]) for e in sv.audit.entries()
              if e.event == "TRANSITION" and e.payload.get("signal") == "c"]
     assert ("escalated", "under_review") not in moves
+
+
+# ===========================================================================
+# SCENE 18 — ONLY UNEARNED DISCOUNTS COUNT
+# Proves: Layer 2, AP-G threshold — "Discounts earned by a declining
+# accuracy record do not count toward the threshold." Two discounts made
+# while the record was poor, then two once it improved, are not yet AP-G;
+# the third unearned one is.
+# ===========================================================================
+
+def test_earned_discounts_do_not_count_toward_ap_g(sv):
+    """
+    AP-G counts only discounts made while accuracy is stable or improving.
+
+    Enter:   sv   fixture
+    Exit:    passes if four discounts (two earned, two not) leave AP-G
+             unset, and a fifth (the third unearned) sets it
+    """
+    # PLAYERS IN THIS SCENE
+    #   label   the characterization used each time
+
+    # --- A poor record: the first two discounts are earned ------------------
+    for correct in (False, False):
+        sv.record_signal_outcome("pat", correct, "observer")
+    for label in ("careless", "unreliable"):
+        sv.record_credibility_discount("pat", "manager", label)
+    # --- The record improves: later outcomes beat earlier ones --------------
+    for correct in (True, True, True):
+        sv.record_signal_outcome("pat", correct, "observer")
+    for label in ("difficult", "not a team player"):
+        sv.record_credibility_discount("pat", "manager", label)
+    assert sv.discounts["pat"] == 4 and sv.unsupported_discounts["pat"] == 2
+    assert E.SENDER_DISCOUNT_RECURRENCE not in conditions(sv)
+    # --- The third unearned discount crosses the threshold ------------------
+    sv.record_credibility_discount("pat", "manager", "emotional")
+    assert E.SENDER_DISCOUNT_RECURRENCE in conditions(sv)
+    assert "pat" in sv.sender_discount_void
 
 # EXEUNT — end of file.

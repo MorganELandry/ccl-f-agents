@@ -7,7 +7,7 @@
 #
 # Usage:   bash verification/run.sh          (from the repository root)
 # Needs:   Java 17+, curl, Python with the repo's requirements installed.
-# Time:    about 5 minutes, almost all of it TLC at MaxLog = 8.
+# Time:    about 15 minutes, almost all of it TLC at MaxLog = 8.
 # ===========================================================================
 set -euo pipefail
 

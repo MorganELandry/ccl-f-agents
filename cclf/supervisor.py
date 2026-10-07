@@ -439,6 +439,7 @@ class Supervisor:
         self.reviewed_groups: set[str] = set()
         self.accuracy: dict[str, list[bool]] = {}      # agent -> signal outcomes
         self.discounts: dict[str, int] = {}            # agent -> discount count
+        self.unsupported_discounts: dict[str, int] = {}  # agent -> AP-G count
         self.sender_discount_void: set[str] = set()    # agents under AP-G
         self.clock = 0
         self._closure_seq = 0
@@ -1359,7 +1360,8 @@ class Supervisor:
     def exit(self, signal_id: str, exit_type: ExitType, by: str, rationale: str,
              open_loop_state: str = "", successor: Optional[str] = None,
              external_pathway: Optional[str] = None, suppression_ref: Optional[str] = None,
-             legal_subtype: Optional[LegalSubtype] = None) -> ExitRecord:
+             legal_subtype: Optional[LegalSubtype] = None,
+             resolution_condition: Optional[str] = None) -> ExitRecord:
         """
         Register a loop exit, enforcing its Layer 2 audit obligations.
 
@@ -1374,6 +1376,9 @@ class Supervisor:
                  suppression_ref    the triggering suppression event
                                     (required for whistleblower)
                  legal_subtype      required for legal exits
+                 resolution_condition  for containment, deferred, ambiguity:
+                                    what the loop is waiting for (optional;
+                                    without it the exit cannot re-enter)
         Exit:    the ExitRecord; the signal is `exited`. Delegated exits make
                  `successor` the signal's steward.
 
@@ -1418,7 +1423,8 @@ class Supervisor:
         # the open loop state (`a or b` picks b when a is "").
         record = ExitRecord(signal_id, exit_type, by, rationale,
                             open_loop_state or sig.state.value, self.clock, successor,
-                            external_pathway, suppression_ref, legal_subtype)
+                            external_pathway, suppression_ref, legal_subtype,
+                            resolution_condition)
         # --- Apply the exit ------------------------------------------------
         previous = sig.state
         sig.state = S.EXITED
@@ -1429,7 +1435,8 @@ class Supervisor:
         self._log("EXIT", by, signal=signal_id, exit_type=exit_type, **{"from": previous},
                   rationale=rationale, open_loop_state=record.open_loop_state,
                   successor=successor, external_pathway=external_pathway,
-                  suppression_ref=suppression_ref, legal_subtype=legal_subtype)
+                  suppression_ref=suppression_ref, legal_subtype=legal_subtype,
+                  resolution_condition=resolution_condition)
         return record
 
     # =======================================================================
@@ -1439,7 +1446,8 @@ class Supervisor:
 
     def reenter(self, signal_id: str, by: str, rationale: str,
                 legal_resumes: Optional[bool] = None,
-                new_steward: Optional[str] = None) -> None:
+                new_steward: Optional[str] = None,
+                condition_met: bool = False) -> None:
         """
         Return an exited signal to review where its exit type allows it.
         Forced and key-person exits need a successor steward (the signal's
@@ -1452,6 +1460,9 @@ class Supervisor:
                  legal_resumes  for legal exits: has the external authority
                                 lifted it?
                  new_steward    a steward to take over (forced / key person)
+                 condition_met  for containment / deferred / ambiguity: the
+                                re-entering agent states that the resolution
+                                condition registered at exit is now met
         Exit:    None; the signal is under_review (or escalated at once if an
                  unresolved review names it); refusals of the re-entry rule
                  itself are logged as REENTRY_REFUSED
@@ -1464,10 +1475,11 @@ class Supervisor:
         Closure). Legal: regulatory intervention / investigative hold "may
         resume to under_review when lifted". No re-entry: terminal,
         superseded, timeout; whistleblower goes to an external process.
-        IMPLEMENTATION DECISION D2 (in statemachine.py): containment,
-        deferred and ambiguity have "no transition specified" in the spec,
-        so the code refuses re-entry and the signal should be re-registered
-        as a new linked signal.
+        Containment, deferred and ambiguity re-enter "when the resolution
+        condition registered at exit is met"; with none registered they do
+        not re-enter. IMPLEMENTATION DECISION D2: the runtime cannot observe
+        the condition, so `condition_met` is the re-entering agent's stated
+        claim, logged with the condition it answers.
 
         Like exit(), this sets sig.state directly; reentry_allowed() is the
         check. The "different agent" test for boundary exits is only that
@@ -1493,7 +1505,8 @@ class Supervisor:
         # --- Ask the re-entry rule for this exit type ----------------------
         ok, reason = reentry_allowed(sig.exit.exit_type, legal_resumes,
                                      sig.exit.legal_subtype, bool(successor),
-                                     by != sig.exit.by)
+                                     by != sig.exit.by,
+                                     bool(sig.exit.resolution_condition), condition_met)
         if not ok:
             self._log("REENTRY_REFUSED", by, signal=signal_id,
                       exit_type=sig.exit.exit_type, reason=reason)
@@ -1506,7 +1519,9 @@ class Supervisor:
         if sig.exit.exit_type in (ExitType.FORCED, ExitType.KEY_PERSON):
             sig.steward = successor
         self._log("REENTRY", by, signal=signal_id, exit_type=sig.exit.exit_type,
-                  rule=reason, rationale=rationale, steward=sig.steward)
+                  rule=reason, rationale=rationale, steward=sig.steward,
+                  resolution_condition=sig.exit.resolution_condition,
+                  condition_met=condition_met)
         self._apply_pending_escalations(sig, by)
 
     # ###########################################################################
@@ -1906,10 +1921,12 @@ class Supervisor:
         that agent's future signals "not meaningful until the channel is
         repaired"; architecture_check() reports it as a void.
 
-        Counting: every discount is counted, but the AP-G check runs only
-        for unsupported discounts (a supported one returns early). The
-        threshold test is "count >= D6" (default 3). AP-G is entered once
-        per agent; nothing in this file removes an agent from it.
+        Counting: every discount is counted in `discounts` and logged, but
+        only unsupported ones count toward AP-G ("Discounts earned by a
+        declining accuracy record do not count toward the threshold",
+        Layer 2, AP-G threshold). The threshold is three (D6, now stated in
+        the draft); the test is "unsupported count >= 3". AP-G is entered
+        once per agent; nothing in this file removes an agent from it.
         """
         # PLAYERS IN THIS SCENE
         #   affected   [signal_id] if a signal was named, else []
@@ -1925,17 +1942,18 @@ class Supervisor:
         if self.discount_supported_by_record(target):
             return
         # --- Escalation: discount despite stable/improving accuracy -------
+        self.unsupported_discounts[target] = self.unsupported_discounts.get(target, 0) + 1
         affected = [signal_id] if signal_id else []
         self._escalate(E.CREDIBILITY_DISCOUNTING, f"agent:{target}",
                        f"{target} discounted ({characterization!r}) despite stable or "
                        f"improving signal accuracy", affected, by)
         # --- AP-G: recurrence at threshold ---------------------------------
-        if (self.discounts[target] >= self.settings.sender_discount_threshold
+        if (self.unsupported_discounts[target] >= self.settings.sender_discount_threshold
                 and target not in self.sender_discount_void):
             self.sender_discount_void.add(target)
             self._escalate(E.SENDER_DISCOUNT_RECURRENCE, f"agent:{target}",
-                           f"AP-G Sender Discount: {self.discounts[target]} discounts "
-                           f"against {target}", [], by)
+                           f"AP-G Sender Discount: {self.unsupported_discounts[target]} "
+                           f"unsupported discounts against {target}", [], by)
 
     # ###########################################################################
     # ACT VIII — DECISIONS, COHERENCE AND EXECUTION GATES
