@@ -188,4 +188,4 @@ See the [README](../README.md).
 
 ## Reference
 
-CCL-F framework v0.2, Zenodo, CC BY-NC-ND 4.0
+Landry, M. Coordination Control Loop Framework (CCL-F), v0.2 working draft (unpublished, 2026). CC BY-NC-ND 4.0.

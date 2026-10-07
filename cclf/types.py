@@ -17,7 +17,7 @@ directly to the LangGraph nodes in nodes.py; the rules about which moves
 between states are legal live in guards.py, and graph.py wires the
 nodes together.
 
-Reference: CCL-F Framework v0.1 (Zenodo, CC BY-NC-ND 4.0)
+Reference: CCL-F v0.2 working draft (unpublished), CC BY-NC-ND 4.0
 
 THE PLAYBILL (what happens in this file)
     Scene 1  CommitmentState   the four states an organization can be in

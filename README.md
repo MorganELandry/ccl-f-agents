@@ -1,8 +1,10 @@
 # CCL-F Commitment Agents
 
-**One LangGraph implementation of the CCL-F commitment state machine, run against two historical safety failures.**
+**A LangGraph prototype inspired by CCL-F, run against two historical safety failures.**
 
-Organizations make catastrophic decisions despite holding the information needed to avoid them. CCL-F treats this as a structural failure: known signals do not convert into corrective action before commitment becomes irreversible. This repo implements the CCL-F commitment state machine as an agent graph and applies the same graph, unchanged, to two cases:
+> **Status (October 2026): being rewritten.** This prototype predates the CCL-F v0.2 working draft and does not yet implement it: its four organization-level states (OPEN → AUTHORITY → EXECUTION) and the ACO detector are not v0.2 constructs, and the Therac-25 evidence set is being re-checked against the historical record. A rewrite to the v0.2 signal lifecycle, execution gates and coherence score is in progress.
+
+Organizations make catastrophic decisions despite holding the information needed to avoid them. CCL-F treats this as a structural failure: known signals do not convert into corrective action before commitment becomes irreversible. This prototype models commitment as an agent graph and applies the same graph, unchanged, to two cases:
 
 | Scenario | Case | Who was kept in the dark |
 |---|---|---|
@@ -149,7 +151,7 @@ run_demo.py        CLI: python run_demo.py {mcas,therac25,open}
 
 Leveson, N. G., & Turner, C. S. (1993). An investigation of the Therac-25 accidents. *IEEE Computer*, 26(7), 18–41.
 
-CCL-F framework v0.2, Zenodo, CC BY-NC-ND 4.0.
+Landry, M. Coordination Control Loop Framework (CCL-F), v0.2 working draft (unpublished, 2026). CC BY-NC-ND 4.0.
 
 ## License
 

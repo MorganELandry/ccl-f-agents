@@ -116,4 +116,4 @@ The same operator-behaviour / authority-inaccessibility pattern that caused the 
 Leveson, N. G., & Turner, C. S. (1993). An investigation of the Therac-25 accidents.  
 *IEEE Computer*, 26(7), 18–41.
 
-CCL-F framework v0.2, Zenodo, CC BY-NC-ND 4.0
+Landry, M. Coordination Control Loop Framework (CCL-F), v0.2 working draft (unpublished, 2026). CC BY-NC-ND 4.0.
