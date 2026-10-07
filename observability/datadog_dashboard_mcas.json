@@ -1,0 +1,218 @@
+{
+  "title": "CCL-F Commitment Agent \u2014 737 MAX MCAS",
+  "description": "Real-time observability for the CCL-F commitment state machine. Traces LangGraph node execution, ACS probability distribution, ACO detection events, and audit chain integrity.",
+  "widgets": [
+    {
+      "id": 1,
+      "definition": {
+        "type": "timeseries",
+        "title": "ACS Probability Distribution Over Time",
+        "requests": [
+          {
+            "q": "avg:cclf.acs.snapshot{cclf.acs.state:open}",
+            "display_type": "line",
+            "style": {
+              "palette": "green"
+            },
+            "metadata": [
+              {
+                "expression": "avg:cclf.acs.snapshot{cclf.acs.state:open}",
+                "alias_name": "p(OPEN)"
+              }
+            ]
+          },
+          {
+            "q": "avg:cclf.acs.snapshot{cclf.acs.state:trajectory}",
+            "display_type": "line",
+            "style": {
+              "palette": "yellow"
+            },
+            "metadata": [
+              {
+                "expression": "avg:cclf.acs.snapshot{cclf.acs.state:trajectory}",
+                "alias_name": "p(TRAJECTORY)"
+              }
+            ]
+          },
+          {
+            "q": "avg:cclf.acs.snapshot{cclf.acs.state:authority}",
+            "display_type": "line",
+            "style": {
+              "palette": "orange"
+            },
+            "metadata": [
+              {
+                "expression": "avg:cclf.acs.snapshot{cclf.acs.state:authority}",
+                "alias_name": "p(AUTHORITY)"
+              }
+            ]
+          },
+          {
+            "q": "avg:cclf.acs.snapshot{cclf.acs.state:execution}",
+            "display_type": "line",
+            "style": {
+              "palette": "red"
+            },
+            "metadata": [
+              {
+                "expression": "avg:cclf.acs.snapshot{cclf.acs.state:execution}",
+                "alias_name": "p(EXECUTION)"
+              }
+            ]
+          }
+        ],
+        "yaxis": {
+          "min": "0",
+          "max": "1"
+        },
+        "markers": [
+          {
+            "value": "y = 0.7",
+            "display_type": "warning dashed",
+            "label": "ACO C1 threshold"
+          }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "definition": {
+        "type": "query_value",
+        "title": "ACO Detections (Session)",
+        "requests": [
+          {
+            "q": "sum:cclf.aco.detections{*}.as_count()",
+            "aggregator": "sum",
+            "conditional_formats": [
+              {
+                "comparator": ">",
+                "value": 0,
+                "palette": "red_on_white"
+              },
+              {
+                "comparator": "=",
+                "value": 0,
+                "palette": "green_on_white"
+              }
+            ]
+          }
+        ],
+        "autoscale": true,
+        "precision": 0
+      }
+    },
+    {
+      "id": 3,
+      "definition": {
+        "type": "timeseries",
+        "title": "Node Execution Duration (ms)",
+        "requests": [
+          {
+            "q": "avg:cclf.node.duration_ms{*} by {cclf.node}",
+            "display_type": "bars"
+          }
+        ],
+        "markers": [
+          {
+            "value": "y = 5000",
+            "display_type": "warning dashed",
+            "label": "5s SLO"
+          }
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "definition": {
+        "type": "timeseries",
+        "title": "Commitment State Transitions",
+        "requests": [
+          {
+            "q": "sum:cclf.transitions.total{cclf.transition.outcome:applied}.as_count()",
+            "display_type": "bars",
+            "style": {
+              "palette": "green"
+            },
+            "metadata": [
+              {
+                "expression": "sum:cclf.transitions.total{cclf.transition.outcome:applied}.as_count()",
+                "alias_name": "Applied"
+              }
+            ]
+          },
+          {
+            "q": "sum:cclf.transitions.total{cclf.transition.outcome:blocked}.as_count()",
+            "display_type": "bars",
+            "style": {
+              "palette": "red"
+            },
+            "metadata": [
+              {
+                "expression": "sum:cclf.transitions.total{cclf.transition.outcome:blocked}.as_count()",
+                "alias_name": "Blocked"
+              }
+            ]
+          },
+          {
+            "q": "sum:cclf.transitions.total{cclf.transition.outcome:rejected_human}.as_count()",
+            "display_type": "bars",
+            "style": {
+              "palette": "orange"
+            },
+            "metadata": [
+              {
+                "expression": "sum:cclf.transitions.total{cclf.transition.outcome:rejected_human}.as_count()",
+                "alias_name": "Rejected (human)"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "definition": {
+        "type": "timeseries",
+        "title": "Evidence Admissible Ratio",
+        "requests": [
+          {
+            "q": "avg:cclf.evidence.admissible_ratio_obs{*}",
+            "display_type": "line",
+            "style": {
+              "palette": "cool"
+            }
+          }
+        ],
+        "yaxis": {
+          "min": "0",
+          "max": "1"
+        },
+        "markers": [
+          {
+            "value": "y = 0.5",
+            "display_type": "info dashed",
+            "label": "Admissibility threshold"
+          }
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "definition": {
+        "type": "note",
+        "content": "## CCL-F MCAS Dashboard\n\nThis dashboard monitors the CCL-F commitment agent running the 737 MAX MCAS case study.\n\n**ACS Distribution**: probability over the four commitment states (OPEN \u2192 TRAJECTORY \u2192 AUTHORITY \u2192 EXECUTION). When p(TRAJECTORY) > 0.7 while formal state = OPEN, C1 ACO condition is active.\n\n**transition_guard** node should always be the fastest \u2014 it's LLM-free by design. Unexplained latency on that node warrants investigation.\n\nAudit chain entries are forwarded as logs. Verify `entry_hash` chain continuity in Logs \u2192 `source:cclf.audit`.",
+        "background_color": "white",
+        "font_size": "14",
+        "text_align": "left",
+        "show_tick": false
+      }
+    }
+  ],
+  "layout_type": "ordered",
+  "notify_list": [],
+  "reflow_type": "fixed",
+  "tags": [
+    "service:cclf-mcas",
+    "team:cclf"
+  ]
+}

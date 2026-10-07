@@ -1,0 +1,14 @@
+# CCL-F observability dependencies
+# Core OTel SDK (required)
+opentelemetry-sdk>=1.20.0
+opentelemetry-api>=1.20.0
+
+# OTLP exporters — install the one matching your backend
+opentelemetry-exporter-otlp-proto-grpc>=1.20.0   # Datadog Agent (gRPC)
+opentelemetry-exporter-otlp-proto-http>=1.20.0   # Dynatrace (HTTP/protobuf)
+
+# Datadog ddtrace bridge (Option B — LLM Observability product)
+# ddtrace>=2.0.0
+
+# Semantic conventions (optional, for standardised attribute names)
+opentelemetry-semantic-conventions>=0.40b0
