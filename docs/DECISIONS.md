@@ -25,14 +25,14 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
 - **Evidence Novelty by logical clock.** "Not present at registration" means the evidence was not attached at registration and its timestamp is later than the signal's. The runtime cannot tell whether new evidence merely restates old analysis.
 - **External Evidence Source by kind and producer.** The draft's test is causal independence, which a runtime cannot see. Here it is two recorded facts:
   - the evidence's kind is a primary document, direct measurement, formal verification or independent party;
-  - its producer is not the process under evaluation.
+  - its producer is neither the process under evaluation nor the signal's registrant.
   
   Model output, assertions and internal analysis never qualify.
 - **Nominal needs cited EES evidence.** A nominal classification (Rule 2) is accepted only when at least one cited item passes the EES test. Otherwise it is recorded as elevated uncertainty, and `CLASSIFICATION_REJECTED` is logged. Novelty is not required here. The runtime cannot check what the evidence says.
 - **Role switch detected by referent.** A role-switch closure is one where the signal's registrant closes it while acting for the other referent (technical vs. customer, Rule 5.3) with no qualifying evidence.
 - **No registered boundary means no limit.** If a signal has no closure authority set, anyone's closure counts. Otherwise, closers outside the set only attempt a closure.
 - **Independent reviewer.** Reopening a role-switch closure requires an agent who is neither the registrant nor the closer.
-- **Frame adoption** is always an authority closure. The signals it displaces are suppressed.
+- **Frame adoption** by someone within the framing signal's closure authority is an authority closure, and the signals it displaces are suppressed. From anyone else it is an attempted closure, and nothing is suppressed.
 
 ### Escalation
 
@@ -49,12 +49,13 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
   - **Needs a different agent:** boundary.
   - **Inferred:** exhaustion.
   - **Legal:** only regulatory intervention or investigative hold, and only once lifted; statutory triggers and judicial orders do not resume.
-  - **External:** whistleblower.
+  - **External:** whistleblower. Re-entry is refused here because the loop continues in an external process.
   - **None:** terminal, superseded and timeout (the draft gives no transition), and containment, deferred and ambiguity (D2).
 
 ### Gates
 
 - **Cumulative classes.** The routine requirements apply to every class, and the elevated requirements also apply to irreversible.
+- **Layer 0 voids fail every class.** The draft marks execution gates "Structurally void" when the precondition is not satisfied, so a void blocks routine and elevated decisions too.
 - **"Classification acknowledged"** means every signal has an operational state. **"Open loops documented"** means no signal is still merely registered.
 - **Recurrence groups reviewed** fails only for a group with an unresolved review.
 - **Unresolved structural reviews block irreversible execution.**

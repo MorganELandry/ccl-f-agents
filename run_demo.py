@@ -271,7 +271,10 @@ def main() -> None:
     path = args.audit or f"{args.scenario}_audit.json"
     with open(path, "w") as f:
         json.dump(supervisor.audit.to_json(), f, indent=2, default=str)
-    print(f"  audit trail      → {path}\n")
+    print(f"  audit trail      → {path}")
+    # The head hash is printed so it can be kept apart from the file; only
+    # a kept head reveals entries cut off the end (AuditTrail.head()).
+    print(f"  audit head       : {supervisor.audit.head()}\n")
 
 
 # ---------------------------------------------------------------------------

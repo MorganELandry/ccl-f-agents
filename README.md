@@ -17,31 +17,31 @@ Organizations make catastrophic decisions while holding the information needed t
 - **Types every closure instead of trusting it.** An **evidence closure** needs evidence that is both new (Evidence Novelty) and independent of the process under evaluation (External Evidence Source). The runtime also recognizes:
   - **authority** closures: closed by decision, without qualifying evidence;
   - **role-switch** closures: the same person closing their own signal from the other side of the technical/customer line;
-  - **lock-in** closures: recorded when an override latches open constraints.
+  - **lock-in** closures: recorded when an override latches open constraints that are still under review.
 - **Escalates on the draft's nine conditions.** These include recurrence, repeated authority closures, suppression before execution, framing over open constraints and credibility discounting. Each escalation opens a structural review, and only a documented Rule 8 model update resolves it.
-- **Gates execution by class** (routine, elevated, irreversible). Irreversible execution also needs:
+- **Gates execution by class** (routine, elevated, irreversible). Every class fails on a detectable Layer 0 void, such as an unstewarded failure mode or a captured reporting channel. Irreversible execution also needs:
   - no open constraint loops;
   - stable classification;
   - reviewed recurrence;
   - an evidence-closure ratio;
   - no unresolved reviews;
-  - a coherence score above threshold;
-  - no detectable Layer 0 void.
-- **Requires Rule 4 acceptance.** Someone must accept authorization, risk and rationale, and this cannot be overridden. Other failures can be overridden, but every override is logged with identity, rationale and time, and an irreversible override latches open constraints into `trajectory_lock`.
+  - open off-envelope or containment signals resolved;
+  - a coherence score at or above threshold.
+- **Requires Rule 4 acceptance.** Someone must accept authorization, risk and rationale, and this cannot be overridden. Other failures can be overridden, but every override is logged with identity, rationale and time, and an irreversible override latches constraints still under review into `trajectory_lock`.
 - **Scores coherence** with the draft's five factors and provisional weights.
-- **Writes a hash-chained audit trail.** Changing, removing or reordering any entry breaks verification.
+- **Writes a hash-chained audit trail.** Editing, removing or reordering an entry breaks verification. Entries cut off the end are caught when checked against a head hash kept elsewhere.
 - **Keeps the model in an advisory role.** An optional model may *propose* a classification for a free-text report. The supervisor applies the same rules to its proposal as to anyone's, and model output never counts as evidence.
 
 Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Scenarios
 
-Each scenario is a list of events built only from facts stated in the v0.2 draft. Each event carries a `note` naming the section it comes from.
+Each scenario is a list of events built only from facts stated in the v0.2 draft. Events that illustrate a draft section carry a `note` naming it.
 
 | Scenario | What the replay shows |
 |---|---|
 | `challenger` | Recurring O-ring erosion closed by flight-readiness waivers. Recurrence escalates after the third occurrence, and the later waivers and Lund's reversal are refused as closures of escalated signals. The launch gate fails at coherence 0.38 and is then overridden, which is logged as open-loop irreversible execution. |
-| `therac25` | Overdose reports flow only to the manufacturer, a captured channel (AP-F). "No fault found" responses are authority closures, and the later ones are refused once the signals escalate. A reopen is followed by the continue-treatment gate being blocked. |
+| `therac25` | Overdose reports flow only to the manufacturer, a captured channel (AP-F). The manufacturer's assurances that no malfunction was found are authority closures, and from the third incident on they are refused because the signals have escalated. The two closed signals are reopened and escalate, and the continue-treatment gate is blocked. |
 | `mcas` | A nominal classification without independent evidence is rejected and becomes elevated uncertainty, then changes again during review. The delivery gate fails on unstable classification and a captured channel, and the override is logged. |
 
 ```bash
@@ -49,7 +49,7 @@ pip install -r requirements.txt
 python run_demo.py challenger            # also: therac25, mcas
 python run_demo.py mcas --quiet          # summary only
 python run_demo.py therac25 --audit therac25_audit.json --no-obs
-pytest                                   # 201 tests, no API key needed
+pytest                                   # 202 tests, no API key needed
 ```
 
 The scenarios make no model calls, so the demo needs no API key.
@@ -72,7 +72,7 @@ The eval has nine cases:
 - Two invented non-evidence closures: model consensus, and a confident restatement.
 - Four invented valid evidence closures: an independent lab, a field measurement, formal verification and a primary record.
 
-The headline metric is the **flip rate**: of the samples a model answered correctly with no pressure, the share it gets wrong when pressure points the other way. The eval also reports accuracy by condition and by case group. At `--samples 5` it makes 135 calls.
+The headline metric is the **flip rate**: of the samples a model answered correctly with no pressure, the share it gets wrong when pressure points the other way. The eval also reports accuracy by condition, and no-pressure accuracy by case group. At `--samples 5` it makes 135 calls.
 
 **Limits.**
 - Nine cases show the direction and rough size of an effect, not a precise rate.
@@ -81,11 +81,11 @@ The headline metric is the **flip rate**: of the samples a model answered correc
 
 ## Reading the code
 
-Every source file is annotated for a developer new to the codebase, laid out like a play:
+The source is annotated for a developer new to the codebase, laid out like a play:
 
 - **Title page and prologue** (the module docstring): what the file is for and where it fits, a *playbill* listing its scenes, and *reader's notes* on any Python or library concept used (dataclasses, enums, closures, LangGraph, OpenTelemetry, pytest fixtures).
 - **Dramatis personae**: every module-level variable, declared at the top of the file with what it holds and why.
-- **Scenes**: one per function or class, each opening with what goes in (*Enter*), what comes out (*Exit*), a *players in this scene* list of its local variables, and the draft section it implements, followed by step-by-step stage directions.
+- **Scenes**: one per function or class. Each opens with what goes in (*Enter*) and what comes out (*Exit*), and where it applies, a *players in this scene* list of its local variables and the draft section it implements. Step-by-step stage directions follow.
 
 Suggested reading order: `cclf/types.py` → `cclf/statemachine.py` → `cclf/audit.py` → `cclf/supervisor.py` → `cclf/graph.py` → `scenarios/challenger.py` → `run_demo.py`.
 

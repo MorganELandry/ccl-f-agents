@@ -22,7 +22,7 @@ cclf.replay                 [scenario]
 
 ### Metrics
 
-Derived from audit entries as they are written (`Instrumentor.record_audit_entry`):
+Derived from audit entries by `Instrumentor.record_audit_entry`. `run_demo.py` forwards each event's new entries after the event; a program calling `replay()` directly must do the same (see `on_event`) to get metrics.
 
 | Metric | Type | Tag | Counted when |
 |---|---|---|---|

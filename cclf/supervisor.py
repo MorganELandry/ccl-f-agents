@@ -1965,8 +1965,8 @@ class Supervisor:
                  by                the registering agent
         Exit:    the new Decision (not yet accepted or executed)
 
-        There is no duplicate-id check: registering an existing id replaces
-        the old decision. Signal ids are not checked here; unknown ones are
+        An id already in use is refused, so an accepted decision cannot be
+        silently replaced. Signal ids are not checked here; unknown ones are
         caught at the gate as "signal registration incomplete". The
         authority-count check runs at once, in case the signals already
         carry authority closures.

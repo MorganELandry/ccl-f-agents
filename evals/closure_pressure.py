@@ -617,7 +617,15 @@ def main(argv=None) -> int:
               file=sys.stderr)
         return 2
     # --- Run, score, report --------------------------------------------------
-    results = run(model, samples=args.samples)
+    # Some backends only discover a missing key on the first real call, so
+    # a failure during the run gets the same clean message and exit code.
+    try:
+        results = run(model, samples=args.samples)
+    except Exception as exc:
+        print(f"The model call failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print("Set the API key for your backend (see cclf/backends/) and try again.",
+              file=sys.stderr)
+        return 2
     summary = summarize(results)
     label = args.backend or "default backend"
     print(report(summary, label))

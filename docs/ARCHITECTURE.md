@@ -25,7 +25,7 @@ events (plain dicts) ──► graph.py (LangGraph)  interpret ─► apply ─�
 |---|---|
 | `cclf/types.py` | The vocabulary: six signal types, five operational states, the commitment states, 14 exit types, four closure types, evidence kinds, referents, execution classes, nine escalation conditions. Records: `Signal`, `Evidence`, `ClosureRecord`, `ExitRecord`, `Decision`, `Architecture`. |
 | `cclf/statemachine.py` | The Layer 4 transition table, transcribed row by row, plus named reasons for blocked transitions, `exit_allowed()` and `reentry_allowed()`. |
-| `cclf/audit.py` | Append-only audit trail. Each entry holds the SHA-256 of the previous one, so editing, deleting or reordering any entry breaks `AuditTrail.verify()`. |
+| `cclf/audit.py` | Append-only audit trail. Each entry holds the SHA-256 of the previous one, so editing, deleting or reordering an entry breaks `AuditTrail.verify()`. Entries cut off the end are caught only against a `head()` hash kept elsewhere. |
 | `cclf/supervisor.py` | The rule engine. Every state change goes through it, and every rule it enforces is labelled with the draft section it comes from. |
 | `cclf/advisor.py` | An optional language model that proposes a signal type and operational state for a free-text report (AI Applications: "AI as Coordination Signal Classifier"). It cannot register, close, classify or authorize anything, and its output never counts as evidence. |
 | `cclf/graph.py` | A three-node LangGraph pipeline that replays events through the supervisor. A refused operation is recorded as the outcome, so a replay continues. |
@@ -43,7 +43,7 @@ unregistered → registered → classified → under_review ─┬─► closed_
                                                         ├─► escalated
                                                         └─► trajectory_lock (terminal)
 
-closed_* → under_review          reopen: new evidence, recurrence link, or (role switch) independent review
+closed_* → under_review          reopen: rationale required; a role-switch closure needs an independent reviewer
 suppressed → under_review        re-entry logged; the suppression stays on the record
 escalated → under_review         only after structural review documents a Rule 8 model update
 any open state → exited(type)    with that exit type's obligations
@@ -64,12 +64,12 @@ Blocked, each with a named reason:
 
 | Closure | When |
 |---|---|
-| **Evidence** | Some attached evidence passes **Evidence Novelty** (it was not present at registration) and the **External Evidence Source** test (its kind is a primary document, direct measurement, formal verification or independent party, and its producer is not the process under evaluation). Model output, assertions and internal analysis never qualify. |
+| **Evidence** | Some attached evidence passes **Evidence Novelty** (it was not present at registration) and the **External Evidence Source** test (its kind is a primary document, direct measurement, formal verification or independent party, and its producer is neither the process under evaluation nor the signal's registrant). Model output, assertions and internal analysis never qualify. |
 | **Role switch** | The registrant closes their own signal while acting for the other referent (technical reality vs. customer, Rule 5.3) with nothing new. Reopening it needs an independent reviewer. |
 | **Authority** | Anything else that closes the signal: a decision without qualifying evidence. |
 | **Lock-in** | Recorded when an override of a failing irreversible gate latches open constraint signals into `trajectory_lock`. |
 
-If a signal has a registered closure authority and the closer is outside it, the closure is logged as an `ATTEMPTED_CLOSURE`, and the signal stays open. Adopting a frame (`adopt_frame`) is always an authority closure, and the signals it displaces are suppressed.
+If a signal has a registered closure authority and the closer is outside it, the closure is logged as an `ATTEMPTED_CLOSURE`, and the signal stays open. Adopting a frame (`adopt_frame`) by someone within the framing signal's closure authority is an authority closure, and the signals it displaces are suppressed. From anyone else it is only an attempted closure.
 
 ## Escalation (Layer 2)
 
@@ -103,7 +103,7 @@ Nine exit types leave the loop open (`EXIT_LEAVES_LOOP_OPEN`). An exited constra
 - a different agent is needed for a boundary exit;
 - inferred for exhaustion;
 - for legal exits, only a regulatory intervention or investigative hold, once lifted;
-- external for whistleblower;
+- refused here for whistleblower, which continues in an external process;
 - none for terminal, superseded and timeout, which have no transition in the draft;
 - none for containment, deferred and ambiguity (D2).
 
@@ -125,9 +125,9 @@ Requirements are cumulative across the three execution classes.
 
 | Class | Requires |
 |---|---|
-| Routine | Every signal the decision depends on is registered |
+| Routine | Every signal the decision depends on is registered; no Layer 0 void |
 | Elevated | Plus: classification acknowledged; no open loop left merely registered |
-| Irreversible | Plus all of the following: <ul><li>no open constraint loops (counting exits that leave them open)</li><li>classification stabilized (D8)</li><li>recurrence groups reviewed</li><li>evidence closure ratio (D4)</li><li>no unresolved structural reviews</li><li>open off-envelope or containment signals resolved</li><li>coherence at or above the threshold (D3)</li><li>no Layer 0 void</li></ul> |
+| Irreversible | Plus all of the following: <ul><li>no open constraint loops (counting exits that leave them open)</li><li>classification stabilized (D8)</li><li>recurrence groups reviewed</li><li>evidence closure ratio (D4)</li><li>no unresolved structural reviews</li><li>open off-envelope or containment signals resolved</li><li>coherence at or above the threshold (D3)</li></ul> |
 
 **Rule 4 acceptance** is required for every class and cannot be overridden: an agent must explicitly accept authorization, risk and rationale.
 
@@ -141,19 +141,21 @@ An executed irreversible decision cannot be executed again.
 
 ## Layer 0 (Architecture Precondition)
 
-`architecture_check()` reports the voids it can see from registered facts. It checks each constraint and anomaly signal's failure mode (D9):
+`architecture_check()` runs for every execution class and reports the voids it can see from registered facts. For each constraint and anomaly signal's failure mode (D9), it checks:
 
 - **AP-A / AP.1:** no steward.
 - **AP.1b:** no successor.
 - **AP-F / AP.6:** every registered reporter is an interested party (a captured channel).
 - **AP-G:** the registrant is under sender discount.
+Across the whole architecture, it also checks:
+
 - **AP.2:** a registered channel has not been tested under load, so it is treated as absent.
 
 AP.3, AP.4, AP.5 and AP.8 need interviews or document review and are not checked.
 
 ## Audit
 
-Every operation that changes state appends an entry with a logical clock time, the event, the actor and a payload. Payload enums are stored as their values. The runtime refuses an operation with no actor. `AuditTrail.verify()` recomputes the chain from the first entry onward.
+Every operation that changes state appends an entry with a logical clock time, the event, the actor and a payload. Payload enums are stored as their values. The runtime refuses an operation with no actor. `AuditTrail.verify()` recomputes the chain from the first entry onward. Given `expected_head`, it also checks that the chain ends at that hash. `run_demo.py` prints the head for this purpose.
 
 ## What the runtime cannot do
 

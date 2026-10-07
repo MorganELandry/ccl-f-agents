@@ -28,6 +28,7 @@ THE PLAYBILL
     Scene 7   test_verify_detects_removed_entry
     Scene 8   test_verify_detects_reordered_entries
     Scene 9   test_payload_cannot_be_edited_in_place
+    Scene 10  test_truncation_needs_a_kept_head
 
 READER'S NOTE — dataclasses.replace
     AuditEntry is a frozen dataclass: its fields cannot be assigned. To
@@ -291,5 +292,33 @@ def test_payload_cannot_be_edited_in_place(sv):
     sv.audit.entries()[0].payload["signal"] = "rewritten"
     ok, why = AuditTrail.verify(sv.audit.entries())
     assert not ok and why.startswith("entry 0:")
+
+
+# ===========================================================================
+# SCENE 10 — THE MISSING LAST PAGES
+# Proves: a chain cut off at the end is still self-consistent, so verify()
+# catches it only against a head() kept elsewhere.
+# ===========================================================================
+
+def test_truncation_needs_a_kept_head(sv):
+    """
+    Dropping the newest entries passes a bare verify() but fails against
+    the head recorded before the cut.
+
+    Enter:   sv   fixture
+    Exit:    passes if the bare check says ok, the head check says not ok,
+             and the full chain passes the head check
+    """
+    # PLAYERS IN THIS SCENE
+    #   full    every entry
+    #   head    the newest entry's hash, as kept elsewhere
+    #   short   the chain with its last entry cut off
+
+    full = sv.audit.entries()
+    head = sv.audit.head()
+    short = full[:-1]
+    assert AuditTrail.verify(short) == (True, "ok")
+    assert not AuditTrail.verify(short, expected_head=head)[0]
+    assert AuditTrail.verify(full, expected_head=head) == (True, "ok")
 
 # EXEUNT — end of file.

@@ -16,7 +16,8 @@ event (plain dict)
    │
    └── every other op  → Supervisor (local, deterministic; no external call)
                               │
-                              ├── audit trail  → memory; JSON file if --audit is given
+                              ├── audit trail  → memory; run_demo.py also writes it to
+                              │                  a JSON file (default <scenario>_audit.json)
                               └── telemetry    → OTLP endpoint, if enabled
                                                  (span attributes: scenario, op;
                                                   metrics: counts by closure type,
@@ -51,7 +52,7 @@ Report text sent to the advisor leaves the host.
 ### 2. Free text in the audit trail (high)
 45 CFR § 164.312(b) audit controls and § 164.312(a) access controls.
 
-The audit trail stores descriptions, rationales and evidence content verbatim. `--audit` writes it to a local JSON file with no access control. The hash chain detects tampering but provides neither confidentiality nor access logging.
+The audit trail stores signal and decision descriptions, rationales and evidence sources verbatim. Evidence content is held in memory but not logged. `run_demo.py` always writes the trail to a local JSON file with no access control. The hash chain detects tampering but provides neither confidentiality nor access logging.
 
 **Remediation:** write the trail to an access-controlled, access-logged store covered by a BAA; restrict writes to the runtime and reads to authorized reviewers.
 

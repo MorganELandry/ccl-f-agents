@@ -27,6 +27,7 @@ THE PLAYBILL (what happens in this file)
     Scene 3   AuditTrail            the append-only log itself
                 append()            add a new, chained entry
                 entries(), __iter__, __len__, events()   read-only views
+                head()              the newest entry's hash, to keep elsewhere
                 verify()            check a whole chain for tampering
                 to_json()           export entries as plain dicts
 
@@ -79,7 +80,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Iterator
+from typing import Any, Iterator, Optional
 
 
 # ===========================================================================
@@ -313,21 +314,42 @@ class AuditTrail:
         """
         return [e.event for e in self._entries]
 
+    def head(self) -> str:
+        """
+        The newest entry's hash (GENESIS if the trail is empty).
+
+        Enter:   (none)
+        Exit:    a hex SHA-256 string, or GENESIS
+
+        Keep this value somewhere the trail's storage cannot reach (a
+        ticket, a second system, a signed message). A chain alone cannot
+        reveal that entries were cut off its end: the shorter chain is
+        still internally consistent. Passing the kept head to verify()
+        closes that gap.
+        """
+        return self._entries[-1].entry_hash if self._entries else GENESIS
+
     # -----------------------------------------------------------------------
     # SCENE 3d — THE INSPECTION
     # -----------------------------------------------------------------------
     @staticmethod
-    def verify(entries: list[AuditEntry]) -> tuple[bool, str]:
+    def verify(entries: list[AuditEntry],
+               expected_head: Optional[str] = None) -> tuple[bool, str]:
         """
         Check a sequence of entries: numbering, links and hashes.
         Returns (True, "ok") or (False, reason naming the first bad entry).
 
-        Enter:   entries   a list of AuditEntry, oldest first (for example
-                           from trail.entries(), or reloaded from storage)
+        Enter:   entries         a list of AuditEntry, oldest first (for
+                                 example from trail.entries(), or reloaded
+                                 from storage)
+                 expected_head   optional: a head() value kept elsewhere.
+                                 If given, the chain must end exactly there.
         Exit:    (True, "ok") if the chain is intact, else (False, reason)
 
         Static, so it can check any list of entries, not only a live trail.
-        It stops at the first problem it finds.
+        It stops at the first problem it finds. Edits, removals and
+        reordering anywhere are always caught; entries cut off the END are
+        caught only when expected_head is given (see head()).
         """
         # PLAYERS IN THIS SCENE
         #   prev   the hash the current entry should link to (GENESIS first)
@@ -345,6 +367,9 @@ class AuditTrail:
             if not e.is_self_consistent():
                 return False, f"entry {i}: contents do not match its hash"
             prev = e.entry_hash
+        # --- Cut short? Only knowable against a head kept elsewhere ---------
+        if expected_head is not None and prev != expected_head:
+            return False, "chain does not end at the expected head (entries missing from the end?)"
         return True, "ok"
 
     # -----------------------------------------------------------------------
