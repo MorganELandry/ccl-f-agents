@@ -1,7 +1,7 @@
 """
 THE INTERLOCK
-A Play in Seventeen Scenes
-==========================
+A Play in Twenty-One Scenes
+===========================
 
 PROLOGUE
 --------
@@ -49,6 +49,7 @@ THE PLAYBILL
     Scene 18  test_evidence_for_unknown_signal_changes_nothing
     Scene 19  test_suppressed_signal_blocks_the_first_irreversible_request
     Scene 20  test_duplicate_decision_is_refused
+    Scene 21  test_successor_who_is_the_steward_is_a_void   (found by the Alloy model)
 """
 
 # ===========================================================================
@@ -613,5 +614,31 @@ def test_duplicate_decision_is_refused(sv):
     with pytest.raises(TransitionRefused):
         sv.register_decision("d", "replacement", X.ROUTINE, ["u"], "someone-else")
     assert sv.decisions["d"] is first and first.accepted_by == "director"
+
+
+# ===========================================================================
+# SCENE 21 — THE UNDERSTUDY WHO IS THE LEAD
+# Proves: AP.1b is not satisfied by naming the steward as their own
+# successor; that is still "a single point of failure". The Alloy model
+# (verification/alloy, NoSinglePointOfStewardship) found this gap.
+# ===========================================================================
+
+def test_successor_who_is_the_steward_is_a_void(sv):
+    """
+    A signal whose successor is its steward fails AP.1b at the gate.
+
+    Enter:   sv   fixture
+    Exit:    passes if the gate reports an AP.1b void and refuses
+    """
+    # PLAYERS IN THIS SCENE
+    #   result   the GateResult
+
+    to_review(sv, "a", signal_type=SignalType.ANOMALY, steward="sam", successor="sam")
+    evidence_close(sv, "a")
+    decision(sv, "d", ["a"])
+    result = sv.request_execution("d", "director")
+    assert result.architecture_void and not result.permitted
+    assert any(f.startswith("AP.1b") and "single point of failure" in f
+               for f in result.failures)
 
 # EXEUNT — end of file.

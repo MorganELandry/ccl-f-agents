@@ -144,7 +144,7 @@ An executed irreversible decision cannot be executed again.
 `architecture_check()` runs for every execution class and reports the voids it can see from registered facts. For each constraint and anomaly signal's failure mode (D9), it checks:
 
 - **AP-A / AP.1:** no steward.
-- **AP.1b:** no successor.
+- **AP.1b:** no successor, or a successor who is the steward (still a single point of failure).
 - **AP-F / AP.6:** every registered reporter is an interested party (a captured channel).
 - **AP-G:** the registrant is under sender discount.
 Across the whole architecture, it also checks:

@@ -34,6 +34,10 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
 - **Independent reviewer.** Reopening a role-switch closure requires an agent who is neither the registrant nor the closer.
 - **Frame adoption** by someone within the framing signal's closure authority is an authority closure, and the signals it displaces are suppressed. From anyone else it is an attempted closure, and nothing is suppressed.
 
+### Layer 0
+
+- **A successor must be someone else.** AP.1b says "a single named steward with no registered successor is a single point of failure". A successor who is the same agent as the steward is treated as the same void. The Alloy model in `verification/` found this gap.
+
 ### Escalation
 
 - **One open review per condition and scope.** A repeat trigger adds signals to the existing review instead of opening a new one.

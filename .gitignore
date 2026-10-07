@@ -221,3 +221,6 @@ __marimo__/
 
 # CCL-F demo output
 *_audit.json
+
+# Formal verification tool cache (verification/run.sh)
+verification/.tools/

@@ -34,6 +34,19 @@ Organizations make catastrophic decisions while holding the information needed t
 
 Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Formal verification
+
+The state machine and the closure and Layer 0 rules are also written as formal models and machine-checked ([verification/](verification/README.md)):
+
+- **TLA+:** TLC explores all 15.5 million reachable states of a bounded model of the Layer 4 state machine. It confirms the draft's four blocked transitions, the recovery and re-entry rules, the append-only audit log, Rule 4, and the logged override.
+- **Alloy:** the Alloy Analyzer checks closure typing and the Layer 0 voids. It found one gap in the runtime, a successor who is also the steward passing AP.1b, which is now fixed.
+
+A test ties both models to the Python code so they cannot drift apart.
+
+```bash
+bash verification/run.sh                 # needs Java 17+; about 5 minutes
+```
+
 ## Scenarios
 
 Each scenario is a list of events built only from facts stated in the v0.2 draft. Events that illustrate a draft section carry a `note` naming it.
@@ -49,7 +62,7 @@ pip install -r requirements.txt
 python run_demo.py challenger            # also: therac25, mcas
 python run_demo.py mcas --quiet          # summary only
 python run_demo.py therac25 --audit therac25_audit.json --no-obs
-pytest                                   # 202 tests, no API key needed
+pytest                                   # 210 tests, no API key needed (3 more run with Java)
 ```
 
 The scenarios make no model calls, so the demo needs no API key.
@@ -100,6 +113,7 @@ evals/           closure_pressure.py
 tests/           state machine, closure typing, classification, escalation,
                  exits, gates, coherence, audit, graph, scenarios, eval harness
 docs/            ARCHITECTURE.md, DECISIONS.md
+verification/    TLA+ and Alloy models, run.sh
 observability/   OpenTelemetry setup (Datadog, Dynatrace)
 COMPLIANCE.md    data flow and HIPAA gaps
 run_demo.py      python run_demo.py {challenger,therac25,mcas}

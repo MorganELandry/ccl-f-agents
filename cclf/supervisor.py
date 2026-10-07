@@ -2243,8 +2243,8 @@ class Supervisor:
         its failure mode (Signal.mode):
           AP-A / AP.1  no steward, in the architecture or on the signal
                        (~lines 169-175, 247)
-          AP.1b        no successor, in the architecture or on the signal
-                       (~line 177)
+          AP.1b        no successor, in the architecture or on the signal,
+                       or a successor who is the steward (~line 177)
           AP-F / AP.6  reporters are registered for the mode and every one
                        of them is an interested party (~lines 209-215, 257)
           AP-G         the signal's registrant is under Sender Discount
@@ -2258,6 +2258,7 @@ class Supervisor:
         #   arch         the registered architecture
         #   sig          each of the decision's signals
         #   mode         its failure mode
+        #   steward, successor   who is named for that mode (or None)
         #   reporters    registered reporters for that mode (or None)
         #   interested   parties interested in denying it (default empty set)
         #   channel, tested   each registered channel and whether it was tested
@@ -2271,9 +2272,17 @@ class Supervisor:
             # --- AP-A: is anyone the steward? ------------------------------
             if not (arch.stewards.get(mode) or sig.steward):
                 voids.append(f"AP-A stewardship void: no steward for failure mode {mode!r}")
-            # --- AP.1b: is a successor registered? -------------------------
-            if not (arch.successors.get(mode) or sig.successor):
+            # --- AP.1b: is a successor registered, and someone else? -------
+            # A "successor" who is the steward is still "a single point of
+            # failure" (~line 177). Found by the Alloy model
+            # (verification/alloy, NoSinglePointOfStewardship).
+            steward = arch.stewards.get(mode) or sig.steward
+            successor = arch.successors.get(mode) or sig.successor
+            if not successor:
                 voids.append(f"AP.1b: no registered successor for failure mode {mode!r}")
+            elif successor == steward:
+                voids.append(f"AP.1b: the successor for failure mode {mode!r} is the "
+                             "steward (single point of failure)")
             # --- AP-F: is the only reporting route captured? ---------------
             # For sets, `a <= b` means "a is a subset of b": every reporter
             # is also an interested party.
