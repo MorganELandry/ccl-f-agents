@@ -117,6 +117,18 @@ Design notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Therac-25 case ann
 
 ---
 
+## Reading the code
+
+Every source file is annotated for a developer new to the codebase, laid out like a play:
+
+- **Title page and prologue** (the module docstring): what the file is for and where it fits, a *playbill* listing its scenes, and *reader's notes* on any Python or library concept used (dataclasses, closures, LangGraph, OpenTelemetry, pytest fixtures).
+- **Dramatis personae**: every module-level variable, declared at the top of the file with what it holds and why.
+- **Scenes**: one per function or class, each opening with what goes in (*Enter*), what comes out (*Exit*), and a *players in this scene* list of its local variables, followed by step-by-step stage directions.
+
+A good reading order: `cclf/types.py` → `cclf/guards.py` → `cclf/nodes.py` → `cclf/graph.py` → `run_demo.py`.
+
+---
+
 ## Repo structure
 
 ```

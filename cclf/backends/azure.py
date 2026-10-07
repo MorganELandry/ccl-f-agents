@@ -1,12 +1,20 @@
 """
-CCL-F Backend — Azure OpenAI Service
-======================================
+THE AZURE UNDERSTUDY
+A Play in One Scene
+====================
+
+PROLOGUE
+--------
+CCL-F Backend — Azure OpenAI Service.
 Routes LLM calls to a tenant-isolated Azure OpenAI deployment.
 Azure OpenAI is covered under Microsoft's HIPAA BAA as part of
 the Azure Enterprise Agreement.
 
 This is the recommended backend for hospital / clinical
-production deployments.
+production deployments. It is one of the four backends the registry in
+backends/__init__.py can choose from (CCLF_LLM_BACKEND=azure). Like every
+backend, it offers exactly one function, get_llm(), that returns a
+LangChain chat model.
 
 Required env vars:
   AZURE_OPENAI_API_KEY
@@ -24,14 +32,42 @@ Compliance prerequisites (not enforced in code — must be verified operationall
      OR evidence_buffer contains only de-identified / coded content
 
 See COMPLIANCE.md for the full gap analysis.
+
+THE PLAYBILL (what happens in this file)
+    Scene 1  get_llm()   check settings, then build an AzureChatOpenAI model
+
+READER'S NOTE
+    The LangChain package (langchain_openai, which also provides the Azure
+    class) is imported inside get_llm(), not at the top of the file. That
+    "lazy import" means the package is only needed if this backend is
+    actually used. See the READER'S NOTE on lazy imports in
+    backends/__init__.py.
 """
+
+# ===========================================================================
+# STAGE MANAGEMENT (imports)
+# ---------------------------------------------------------------------------
+# os        reads environment variables (os.environ).
+# logging   provides this module's logger (declared below).
+# ===========================================================================
 
 from __future__ import annotations
 import os
 import logging
 
+
+# ===========================================================================
+# DRAMATIS PERSONAE (every module-level variable, declared here at the top)
+# ===========================================================================
+
+# logger — this module's logger, named "cclf.backends.azure" after the
+#   module. (get_llm() below does not currently log anything.)
 logger = logging.getLogger(__name__)
 
+# _REQUIRED — the environment variables that must all be set (non-empty)
+#   before this backend will build a model. Unlike the OpenAI and Anthropic
+#   backends, Azure refuses to start with missing settings, because there
+#   is no sensible default endpoint or deployment to fall back on.
 _REQUIRED = [
     "AZURE_OPENAI_API_KEY",
     "AZURE_OPENAI_ENDPOINT",
@@ -40,7 +76,28 @@ _REQUIRED = [
 ]
 
 
+# ===========================================================================
+# SCENE 1 — THE AUDITION
+# get_llm(): are all Azure settings present, and if so, build the model
+# ===========================================================================
+
 def get_llm():
+    """
+    Build and return a LangChain AzureChatOpenAI model.
+
+    Enter:   (no arguments; settings come from environment variables)
+    Exit:    an AzureChatOpenAI pointed at AZURE_OPENAI_ENDPOINT, using
+             deployment AZURE_OPENAI_DEPLOYMENT_NAME, API version
+             AZURE_OPENAI_API_VERSION, key AZURE_OPENAI_API_KEY and
+             temperature 0.1
+             raises ImportError if langchain-openai is not installed
+             raises EnvironmentError naming every missing setting in _REQUIRED
+    """
+    # PLAYERS IN THIS SCENE
+    #   AzureChatOpenAI   LangChain's Azure OpenAI chat-model class (lazily imported)
+    #   missing           names from _REQUIRED that are unset or empty
+
+    # --- Lazy import, with a helpful message if the package is missing -----
     try:
         from langchain_openai import AzureChatOpenAI
     except ImportError:
@@ -49,6 +106,10 @@ def get_llm():
             "Run: pip install langchain-openai"
         )
 
+    # --- Check every required setting at once ----------------------------
+    # A list comprehension: keep each name k whose value is unset or "".
+    # Collecting them all means the error lists every missing variable,
+    # not just the first one, so the user can fix them in one go.
     missing = [k for k in _REQUIRED if not os.environ.get(k)]
     if missing:
         raise EnvironmentError(
@@ -56,6 +117,9 @@ def get_llm():
             f"See COMPLIANCE.md → Azure OpenAI Setup."
         )
 
+    # --- Build the model -----------------------------------------------------
+    # os.environ[...] (square brackets) is safe here: the check above has
+    # already proved every one of these variables is set.
     return AzureChatOpenAI(
         azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
         azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"],
@@ -63,3 +127,5 @@ def get_llm():
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
         temperature=0.1,
     )
+
+# EXEUNT — end of file.
