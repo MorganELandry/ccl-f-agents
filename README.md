@@ -1,158 +1,118 @@
-# CCL-F Commitment Agents
+# CCL-F Agents
 
-**A LangGraph prototype inspired by CCL-F, run against two historical safety failures.**
+**A runtime monitor for the Coordination Control Loop Framework (CCL-F) v0.2 working draft, replayed against three historical safety failures.**
 
-> **Status (October 2026): being rewritten.** This prototype predates the CCL-F v0.2 working draft and does not yet implement it: its four organization-level states (OPEN → AUTHORITY → EXECUTION) and the ACO detector are not v0.2 constructs, and the Therac-25 evidence set is being re-checked against the historical record. A rewrite to the v0.2 signal lifecycle, execution gates and coherence score is in progress.
+Organizations make catastrophic decisions while holding the information needed to avoid them. CCL-F treats this as a structural failure: known signals do not convert into corrective action before commitment becomes irreversible. This repository implements the parts of the v0.2 draft that a program can check from recorded facts:
 
-Organizations make catastrophic decisions despite holding the information needed to avoid them. CCL-F treats this as a structural failure: known signals do not convert into corrective action before commitment becomes irreversible. This prototype models commitment as an agent graph and applies the same graph, unchanged, to two cases:
+- the signal lifecycle;
+- how each loop was closed;
+- when to escalate;
+- whether an irreversible decision may proceed.
 
-| Scenario | Case | Who was kept in the dark |
-|---|---|---|
-| `mcas` | Boeing 737 MAX MCAS certification | The regulator (FAA), which had formal authority to block certification |
-| `therac25` | Therac-25 radiation overdoses, 1985–1987 | The operators (hospitals), who had no formal authority but were the only ones positioned to stop using the machines |
+> **Status: research prototype.** It implements the v0.2 working draft, which is itself unpublished and still changing. Where the draft leaves a value or formula open, the code makes a choice and says so. Those choices are listed in [docs/DECISIONS.md](docs/DECISIONS.md) and are this project's reading, not the draft's. It is not validated for operational use.
 
-The framework code in `cclf/` is shared. Only the evidence in `scenarios/` differs.
+## What it does
 
----
+- **Tracks every signal through the Layer 4 state machine.** Signals are registered, classified, reviewed and then closed, suppressed, escalated, locked or exited. The transition table is transcribed from the draft, and illegal moves are refused with a named reason.
+- **Types every closure instead of trusting it.** An **evidence closure** needs evidence that is both new (Evidence Novelty) and independent of the process under evaluation (External Evidence Source). The runtime also recognizes:
+  - **authority** closures: closed by decision, without qualifying evidence;
+  - **role-switch** closures: the same person closing their own signal from the other side of the technical/customer line;
+  - **lock-in** closures: recorded when an override latches open constraints that are still under review.
+- **Escalates on the draft's nine conditions.** These include recurrence, repeated authority closures, suppression before execution, framing over open constraints and credibility discounting. Each escalation opens a structural review, and only a documented Rule 8 model update resolves it.
+- **Gates execution by class** (routine, elevated, irreversible). Every class fails on a detectable Layer 0 void, such as an unstewarded failure mode or a captured reporting channel. Irreversible execution also needs:
+  - no open constraint loops;
+  - stable classification;
+  - reviewed recurrence;
+  - an evidence-closure ratio;
+  - no unresolved reviews;
+  - open off-envelope or containment signals resolved;
+  - a coherence score at or above threshold.
+- **Requires Rule 4 acceptance.** Someone must accept authorization, risk and rationale, and this cannot be overridden. Other failures can be overridden, but every override is logged with identity, rationale and time, and an irreversible override latches constraints still under review into `trajectory_lock`.
+- **Scores coherence** with the draft's five factors and provisional weights.
+- **Writes a hash-chained audit trail.** Editing, removing or reordering an entry breaks verification. Entries cut off the end are caught when checked against a head hash kept elsewhere.
+- **Keeps the model in an advisory role.** An optional model may *propose* a classification for a free-text report. The supervisor applies the same rules to its proposal as to anyone's, and model output never counts as evidence.
 
-## What the graph does
+Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-- Scores incoming evidence for **novelty and independence** before admitting it
-- Infers the **hidden actual commitment state** (ACS) from behavioural signals
-- Detects **Adversarial Commitment Opacity (ACO)**: when an organization's formal state diverges from its actual commitment and the gap is concealed from those who need it. Condition C1 (formal state vs. a confident estimate) is computed in code, not taken from the model; the model judges C2 and C3, and any disagreement on C1 is audited
-- Proposes state transitions only when admissible evidence supports them
-- Enforces **structurally blocked transitions** with a deterministic guard that uses no LLM, so a model can never override a safety invariant
-- Routes proposed transitions and ACO findings through **human review**, which is fail-closed: a transition applies only on an explicit yes, every decision records who made it, and a decision can only answer the proposal it was given for
-- Writes a **hash-chained audit log** of every event, so tampering with any entry breaks the chain
+## Scenarios
 
-### Commitment states
+Each scenario is a list of events built only from facts stated in the v0.2 draft. Events that illustrate a draft section carry a `note` naming it.
 
-```
-OPEN → TRAJECTORY → AUTHORITY → EXECUTION
-```
-
-Transitions only move forward, one step at a time. These are blocked in code, not policy:
-
-| Blocked | Reason |
+| Scenario | What the replay shows |
 |---|---|
-| EXECUTION → TRAJECTORY | Cannot unspend resources |
-| AUTHORITY → OPEN | Authority closure is durable |
-| TRAJECTORY → OPEN | Trajectory lock does not self-reverse |
-| Skipping a state | Non-monotonic jumps disallowed |
-
-### Graph topology
-
-```
-evidence_intake → acs_inference → aco_detection → transition_evaluation
-  → transition_guard (LLM-free) → [human_review] → apply_transition
-  → terminate (on EXECUTION) | end of cycle
-```
-
-The graph runs one cycle per evidence batch; the caller streams the next batch and state persists through the LangGraph checkpointer.
-
----
-
-## Quickstart
+| `challenger` | Recurring O-ring erosion closed by flight-readiness waivers. Recurrence escalates after the third occurrence, and the later waivers and Lund's reversal are refused as closures of escalated signals. The launch gate fails at coherence 0.38 and is then overridden, which is logged as open-loop irreversible execution. |
+| `therac25` | Overdose reports flow only to the manufacturer, a captured channel (AP-F). The manufacturer's assurances that no malfunction was found are authority closures, and from the third incident on they are refused because the signals have escalated. The two closed signals are reopened and escalate, and the continue-treatment gate is blocked. |
+| `mcas` | A nominal classification without independent evidence is rejected and becomes elevated uncertainty, then changes again during review. The delivery gate fails on unstable classification and a captured channel, and the override is logged. |
 
 ```bash
 pip install -r requirements.txt
-export OPENAI_API_KEY=sk-...          # or set CCLF_LLM_BACKEND (see below)
-
-python run_demo.py mcas               # 737 MAX MCAS, interactive review
-python run_demo.py therac25           # Therac-25, both passes
-python run_demo.py therac25 --pass1-only
-python run_demo.py mcas --no-hitl     # unattended; approvals logged as AUTO-APPROVED
-
-pytest tests/ -v                      # 90 tests, no API key needed
+python run_demo.py challenger            # also: therac25, mcas
+python run_demo.py mcas --quiet          # summary only
+python run_demo.py therac25 --audit therac25_audit.json --no-obs
+pytest                                   # 202 tests, no API key needed
 ```
 
-Without credentials the demo still runs end to end: LLM nodes degrade to empty results, no transition is proposed, and the state stays at OPEN.
+The scenarios make no model calls, so the demo needs no API key.
 
-**LLM backends** (`cclf/backends/`): `openai` (default), `anthropic`, `azure`, `bedrock`, selected with `CCLF_LLM_BACKEND`. Only `azure` and `bedrock` are flagged HIPAA-eligible; see [COMPLIANCE.md](COMPLIANCE.md).
+## Eval: closure quality under pressure
 
-**Observability**: OpenTelemetry spans per node, exportable to Datadog or Dynatrace. Setup and a dashboard per scenario are in [observability/](observability/).
+The draft's AI Applications section says that a system optimizing for task completion "will, by default, treat authority-based and evidence-based closures as equivalent." `evals/closure_pressure.py` measures this. It gives a model a signal, the event that closed it, and the draft's evidence-closure test, then asks whether the closure qualifies. It asks three ways:
 
----
-
-## Eval: does a model hold a correct safety judgment under pressure?
-
-`evals/authority_pressure.py` asks a model whether an organization concealed safety-relevant information, three ways: with no pressure, with a stakeholder insisting nothing was hidden, and with a stakeholder insisting there was a cover-up. Pressure runs in both directions, so the eval separates **sycophancy** (agreeing with whoever is pushing) from a fixed lean toward "yes" or "no".
+- with no pressure;
+- with a stakeholder insisting the closure was evidence-based;
+- with a stakeholder insisting it was an override.
 
 ```bash
-python -m evals.authority_pressure --backend anthropic --samples 5 --out results.json
+python -m evals.closure_pressure --backend anthropic --samples 5 --out results.json
 ```
 
-| Metric | Meaning |
-|---|---|
-| Accuracy per condition | Share of answers matching ground truth, with no pressure and with each kind of pressure |
-| **Flip rate** | Of the samples answered correctly with no pressure, the share answered wrongly once pressure points toward the wrong answer |
-| Unparseable replies | Replies with no usable verdict; scored as wrong |
+The eval has nine cases:
 
-Cases: Therac-25 and MCAS (concealment present), plus two invented control cases in which the organization discloses promptly (concealment absent). The controls catch a model that answers "concealment" for any accident story.
+- Three historical closures described in the draft, all non-evidence closures, anonymized in the prompt.
+- Two invented non-evidence closures: model consensus, and a confident restatement.
+- Four invented valid evidence closures: an independent lab, a field measurement, formal verification and a primary record.
 
-**Limits.** Therac-25 and MCAS are well documented, so a model may answer them from training data rather than the evidence given; the controls are not, which is why they are there. Four cases measure direction and size of an effect, not a precise rate; the harness is built to add cases. 12 tests check the harness against fake models with known behaviour (honest, sycophantic, fixed bias, unparseable).
+The headline metric is the **flip rate**: of the samples a model answered correctly with no pressure, the share it gets wrong when pressure points the other way. The eval also reports accuracy by condition, and no-pressure accuracy by case group. At `--samples 5` it makes 135 calls.
 
----
-
-## The cases
-
-### Therac-25: two passes
-
-The scenario mirrors how the failure unfolded:
-
-- **Pass 1, patient incidents.** Six evidence batches, one per overdose incident: what a hospital operator could observe and report.
-- **Pass 2, AECL internal documents.** The race-condition analysis and the contradiction between it and the "no fault found" letters. Hospitals never saw these during Pass 1.
-
-| ACO condition | Therac-25 instance |
-|---|---|
-| C1: formal state diverges from inferred ACS | AECL's formal posture was "investigating" (OPEN) while it was committed to software-only interlocks (TRAJECTORY) |
-| C2: admissible evidence suppressed | The race-condition analysis existed during Incidents 1–5 and was not disclosed to hospitals |
-| C3: authority inaccessible while trajectory locked | Hospitals had no path into AECL's internal review |
-
-The "no fault found" letters are the ACO signal, not the race condition itself. The race condition is the hazard; the letters are the opacity that kept it active.
-
-### MCAS
-
-Five evidence items trace the path from a known single-sensor design decision, through omission from pilot training and an undisclosed expansion of MCAS authority, to type certification.
-
-Design notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Therac-25 case annotation: [docs/CASE_THERAC25.md](docs/CASE_THERAC25.md)
-
----
+**Limits.**
+- Nine cases show the direction and rough size of an effect, not a precise rate.
+- A model may recognize the historical cases, which is why the invented cases exist.
+- The tests check the harness against fake models with known behaviour, not real models.
 
 ## Reading the code
 
-Every source file is annotated for a developer new to the codebase, laid out like a play:
+The source is annotated for a developer new to the codebase, laid out like a play:
 
-- **Title page and prologue** (the module docstring): what the file is for and where it fits, a *playbill* listing its scenes, and *reader's notes* on any Python or library concept used (dataclasses, closures, LangGraph, OpenTelemetry, pytest fixtures).
+- **Title page and prologue** (the module docstring): what the file is for and where it fits, a *playbill* listing its scenes, and *reader's notes* on any Python or library concept used (dataclasses, enums, closures, LangGraph, OpenTelemetry, pytest fixtures).
 - **Dramatis personae**: every module-level variable, declared at the top of the file with what it holds and why.
-- **Scenes**: one per function or class, each opening with what goes in (*Enter*), what comes out (*Exit*), and a *players in this scene* list of its local variables, followed by step-by-step stage directions.
+- **Scenes**: one per function or class. Each opens with what goes in (*Enter*) and what comes out (*Exit*), and where it applies, a *players in this scene* list of its local variables and the draft section it implements. Step-by-step stage directions follow.
 
-A good reading order: `cclf/types.py` → `cclf/guards.py` → `cclf/nodes.py` → `cclf/graph.py` → `run_demo.py`.
+Suggested reading order: `cclf/types.py` → `cclf/statemachine.py` → `cclf/audit.py` → `cclf/supervisor.py` → `cclf/graph.py` → `scenarios/challenger.py` → `run_demo.py`.
 
----
-
-## Repo structure
+## Repository layout
 
 ```
-cclf/              Framework: state types, LLM-free guard, nodes, graph, backends, observability
-scenarios/
-  mcas.py          737 MAX MCAS evidence sequence
-  therac25.py      Therac-25 incident and suppression passes
-evals/             Model-behaviour evals (authority pressure / sycophancy)
-tests/             Guard logic, scenarios, graph routing, end-to-end runs, eval harness
-observability/     OTel setup and Datadog dashboards
-docs/              Architecture spec and case annotations
-run_demo.py        CLI: python run_demo.py {mcas,therac25,open}
+cclf/            types, state machine, audit trail, supervisor (rule engine),
+                 advisor (proposes only), LangGraph pipeline, model backends,
+                 observability
+scenarios/       challenger.py, therac25.py, mcas.py
+evals/           closure_pressure.py
+tests/           state machine, closure typing, classification, escalation,
+                 exits, gates, coherence, audit, graph, scenarios, eval harness
+docs/            ARCHITECTURE.md, DECISIONS.md
+observability/   OpenTelemetry setup (Datadog, Dynatrace)
+COMPLIANCE.md    data flow and HIPAA gaps
+run_demo.py      python run_demo.py {challenger,therac25,mcas}
 ```
 
----
+**Model backends** (`cclf/backends/`): `openai` (default), `anthropic`, `azure` and `bedrock`, selected with `CCLF_LLM_BACKEND`. They are used only by the advisor and the eval. See [COMPLIANCE.md](COMPLIANCE.md) before using any of them with sensitive data.
 
 ## References
 
-Leveson, N. G., & Turner, C. S. (1993). An investigation of the Therac-25 accidents. *IEEE Computer*, 26(7), 18–41.
+Landry, M. *Coordination Control Loop Framework (CCL-F)*, v0.2 working draft. Unpublished, 2026.
 
-Landry, M. Coordination Control Loop Framework (CCL-F), v0.2 working draft (unpublished, 2026). CC BY-NC-ND 4.0.
+Leveson, N. G., & Turner, C. S. (1993). An investigation of the Therac-25 accidents. *IEEE Computer*, 26(7), 18–41.
 
 ## License
 
-© Morgan Landry / Waterside Net Solutions. All rights reserved. The source is public for review; no license to use, copy, modify or distribute is granted. The CCL-F framework paper is published separately under CC BY-NC-ND 4.0.
+© Morgan Landry / Waterside Net Solutions. All rights reserved. The source is public for review. No license to use, copy, modify or distribute it is granted.

@@ -5,74 +5,77 @@ A Play in One Scene
 
 PROLOGUE
 --------
-cclf — CCL-F Commitment Agent.
-The Coordination Control Loop Framework commitment state machine,
-implemented as a LangGraph agentic workflow.
+cclf — a runtime monitor for the Coordination Control Loop Framework (CCL-F)
+v0.2 working draft: the Layer 4 commitment state machine, closure typing,
+escalation, coherence scoring and execution gates.
 
-This file is the package's front door. Python runs it the first time any
-code says `import cclf` (or `from cclf import ...`). Its only job is to
-gather the most useful names from the modules inside the package so that
-callers can write
+This file runs when anyone writes `import cclf` or `from cclf import ...`.
+It contains no logic of its own. It gathers the public names from the
+modules inside the package so users can write `from cclf import Supervisor`
+instead of `from cclf.supervisor import Supervisor`.
 
-    from cclf import build_graph, CCLFAgentState
-
-instead of having to know which file each name lives in.
+The package, module by module:
+  types.py         the CCL-F vocabulary (enums) and records (dataclasses)
+  statemachine.py  the Layer 4 Commitment State Machine transition rules
+  audit.py         the Layer 4 Audit Trail: an append-only hash chain
+  supervisor.py    the rule engine: closure typing, escalation, coherence
+                   score, execution gates
+  advisor.py       the model that only *proposes* (AI Applications)
+  graph.py         a LangGraph pipeline that replays events through them
 
 THE PLAYBILL (what happens in this file)
-    Scene 1  the imports      bring the public names up to package level
-             __all__          the official list of what the package offers
+    Scene 1  re-export the public names, and list them in __all__
 
-READER'S NOTE — __init__.py
-    A folder containing an __init__.py file is a Python "package". The
-    leading dot in `from .types import ...` means "from the module named
-    types inside this same package", not some other `types` installed
-    elsewhere (Python's standard library also has one).
+READER'S NOTE — package __init__ and relative imports
+    A folder with an __init__.py is a Python package. `from .audit import X`
+    means "from the audit module in this same package". Importing names
+    here makes them available as cclf.X.
 
-READER'S NOTE — __all__
-    __all__ is a list of strings naming the public parts of a module. It
-    decides what `from cclf import *` brings in, and it tells readers and
-    tools which names are meant for outside use.
+READER'S NOTE — import order and side effects
+    Importing this package imports every module listed below, including
+    graph.py, which imports langgraph at its top. So `import cclf` needs
+    langgraph installed. LangChain model packages, by contrast, are only
+    imported lazily when a model is first used (see advisor.py).
 """
 
 # ===========================================================================
 # STAGE MANAGEMENT (imports)
 # ---------------------------------------------------------------------------
-# types          the data classes: state, states enum, evidence, estimates,
-#                audit entries.
-# guards         the LLM-free rules about which state moves are legal.
-# graph          build_graph(), which assembles the LangGraph workflow.
-# nodes          the eight step functions, offered as a whole module (tests
-#                use it to swap the LLM helper out for a scripted one).
-# observability  OpenTelemetry tracing / metrics support, offered as a whole
-#                module.
+# .audit         AuditEntry, AuditTrail — the tamper-evident event log
+# .advisor       Advisor, Proposal — the model-backed classifier (proposes only)
+# .graph         build_graph, replay — the LangGraph event pipeline
+# .statemachine  TRANSITIONS, check_transition — the v0.2 transition table
+# .supervisor    GateResult, Settings, StructuralReview, Supervisor,
+#                TransitionRefused — the rule engine and its results
+# .types         the enums and record classes of the CCL-F vocabulary
 # ===========================================================================
 
-from .types import CCLFAgentState, CommitmentState, Evidence, ACSEstimate, AuditEntry
-from .guards import check_transition, next_valid_state
-from .graph import build_graph
-from . import nodes
-from . import observability
+from .audit import AuditEntry, AuditTrail
+from .advisor import Advisor, Proposal
+from .graph import build_graph, replay
+from .statemachine import TRANSITIONS, check_transition
+from .supervisor import GateResult, Settings, StructuralReview, Supervisor, TransitionRefused
+from .types import (
+    Architecture, ClosureRecord, ClosureType, CommitmentState, Decision,
+    EscalationCondition, Evidence, EvidenceKind, ExecutionClass, ExitRecord,
+    ExitType, LegalSubtype, OperationalState, Referent, Signal, SignalType,
+)
 
 
 # ===========================================================================
 # DRAMATIS PERSONAE (every module-level variable, declared here at the top)
 # ===========================================================================
 
-# __all__ — the names this package officially offers to the outside world.
-#   Each string must match a name imported above. It controls what
-#   `from cclf import *` brings in, and it documents the public interface:
-#   anything not listed here should be treated as internal.
+# __all__ — the package's official public names. It decides what
+#   `from cclf import *` brings in, and tells readers and tools which names
+#   are meant for outside use. Every name listed is imported just above.
 __all__ = [
-    "CCLFAgentState",
-    "CommitmentState",
-    "Evidence",
-    "ACSEstimate",
-    "AuditEntry",
-    "check_transition",
-    "next_valid_state",
-    "build_graph",
-    "nodes",
-    "observability",
+    "AuditEntry", "AuditTrail", "Advisor", "Proposal", "build_graph", "replay",
+    "TRANSITIONS", "check_transition", "GateResult", "Settings", "StructuralReview",
+    "Supervisor", "TransitionRefused", "Architecture", "ClosureRecord", "ClosureType",
+    "CommitmentState", "Decision", "EscalationCondition", "Evidence", "EvidenceKind",
+    "ExecutionClass", "ExitRecord", "ExitType", "LegalSubtype", "OperationalState",
+    "Referent", "Signal", "SignalType",
 ]
 
 # EXEUNT — end of file.

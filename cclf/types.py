@@ -1,501 +1,730 @@
 """
-THE CAST LIST
-A Play in Five Scenes
-=====================
+THE VOCABULARY
+A Play in Two Acts
+==================
 
 PROLOGUE
 --------
-Every other file in the cclf package talks about the same handful of things:
-the commitment state an organization is in, the evidence it has been shown,
-the agent's best guess about what is really going on, and the audit log
-that records every decision. This file defines those things, once, so the
-rest of the program shares one vocabulary (the canonical CCL-F v0.2 names).
+CCL-F v0.2 vocabulary as Python types.
 
-Nothing in here calls a language model or the network. These are plain data
-containers plus a few small helper methods. The commitment states map
-directly to the LangGraph nodes in nodes.py; the rules about which moves
-between states are legal live in guards.py, and graph.py wires the
-nodes together.
+Every name here comes from the CCL-F v0.2 working draft (Layer 2, Layer 4
+and Key Definitions). Where the draft leaves a value open, the choice made
+here is recorded in docs/DECISIONS.md and marked "implementation decision".
 
-Reference: CCL-F v0.2 working draft (unpublished), CC BY-NC-ND 4.0
+This file holds no behaviour of its own beyond a few small read-only
+properties. It is the shared cast list: supervisor.py, statemachine.py,
+advisor.py, graph.py and the tests all import these names so that every
+part of the system spells "under_review" or "authority closure" the same way.
 
 THE PLAYBILL (what happens in this file)
-    Scene 1  CommitmentState   the four states an organization can be in
-    Scene 2  Evidence          one piece of evidence, plus its quality scores
-    Scene 3  ACSEstimate       the agent's probability guess over the states
-    Scene 4  AuditEntry        one tamper-evident line in the audit log
-    Scene 5  CCLFAgentState    everything the graph carries from node to node
+    ACT I — THE ENUMERATIONS (fixed lists of named values)
+      Scene 1   SignalType            the six coordination signal types
+      Scene 2   OperationalState      the five operational states
+      Scene 3   CommitmentState       where a signal is in its lifecycle
+                CLOSED_STATES         the three closed commitment states
+      Scene 4   ExitType              the fourteen loop exit types
+                EXIT_LEAVES_LOOP_OPEN exits after which the loop is still open
+      Scene 5   LegalSubtype          the four legal-exit sub-types
+      Scene 6   ClosureType           the four closure types
+      Scene 7   EvidenceKind          what process produced a piece of evidence
+                EES_ELIGIBLE_KINDS    kinds that can be External Evidence Sources
+      Scene 8   Referent              technical reality vs. customer (Rule 5.3)
+      Scene 9   ExecutionClass        irreversible / elevated / routine
+      Scene 10  EscalationCondition   the nine automatic escalation conditions
+    ACT II — THE RECORDS (dataclasses that hold facts)
+      Scene 1   Evidence              one item of evidence (frozen)
+      Scene 2   ClosureRecord         one typed closure event (frozen)
+      Scene 3   ExitRecord            one registered loop exit (frozen)
+      Scene 4   Signal                a coordination signal and its history
+      Scene 5   Decision              an execution-class decision node
+      Scene 6   Architecture          the registered Layer 0 architecture
+
+READER'S NOTE — str-Enum
+    `class SignalType(str, Enum)` makes an enumeration whose members are
+    *also* real strings. SignalType.CONSTRAINT == "constraint" is True, and
+    the member can be passed anywhere a str is expected (for example to
+    json.dumps). SignalType("constraint") looks a member up by its value,
+    which is how advisor.py turns a model's text reply into a member, and
+    raises ValueError if no member has that value.
+
+READER'S NOTE — frozenset
+    A frozenset is a set that cannot be changed after it is made: no add(),
+    no remove(). That makes it safe to share as a module-level constant
+    (nobody can accidentally edit it) and makes it hashable, so it can be a
+    default value in a dataclass. `x in some_frozenset` is a fast lookup.
 
 READER'S NOTE — dataclasses
-    `@dataclass` placed above a class tells Python to write the boring
-    methods for you. From the list of annotated fields (`content: str`) it
-    generates __init__ (so you can write Evidence(evidence_id=..., ...)),
-    __repr__ (a readable print-out) and __eq__ (two objects with equal
-    fields compare equal). Fields with a default must come after fields
-    without one, just like function arguments.
+    @dataclass writes the boring parts of a class for you: an __init__ that
+    takes each annotated field in order, a readable __repr__, and __eq__.
+    @dataclass(frozen=True) additionally forbids assigning to a field after
+    construction (it raises FrozenInstanceError). Frozen records here are
+    things the audit trail treats as permanent facts: a piece of evidence,
+    a closure, an exit. Signal, Decision and Architecture are *not* frozen
+    because the supervisor updates them as events happen.
 
-READER'S NOTE — field(default_factory=...)
-    A plain default such as `confidence: float = 0.0` is evaluated once,
-    when the class is defined, and shared by every instance. That is fine
-    for numbers and strings, which cannot be changed in place. It is wrong
-    for a list: every object would share the *same* list, and appending to
-    one would append to all. (Python's dataclass refuses a bare `= []` for
-    exactly this reason.) `field(default_factory=list)` instead says "call
-    list() each time a new object is built", so every object gets its own
-    fresh list. The same trick is used with `time.time`, so each object
-    gets the time *it* was created, not the time the module was loaded,
-    and with `ACSEstimate`, so each state gets its own estimate object.
+READER'S NOTE — field(default_factory=list)
+    A default like `closures: list = []` would be one single list shared by
+    every Signal ever created, so appending to one would append to all.
+    field(default_factory=list) tells the dataclass to call list() afresh for
+    each new object, so each Signal gets its own empty list.
 
-READER'S NOTE — Enums
-    An Enum is a fixed, named set of values. CommitmentState.OPEN can only
-    ever be one of four members, so a typo becomes an error instead of a
-    silent bug. Here the class also inherits from `str`, which makes every
-    member *also* a real string: CommitmentState.OPEN == "OPEN" is True,
-    and json.dumps() writes it out as "OPEN". That is what lets the audit
-    hash (Scene 4) and the LangGraph checkpointer handle states easily.
+READER'S NOTE — @property
+    A method decorated with @property is read like an attribute, without
+    parentheses: `sig.is_open`, not `sig.is_open()`. It is computed every
+    time it is read, so it always reflects the signal's current state.
 """
 
 # ===========================================================================
 # STAGE MANAGEMENT (imports)
 # ---------------------------------------------------------------------------
-# `from __future__ import annotations` stores type hints as text instead of
-#   evaluating them, so a hint may name a class defined later in the file.
-# Enum                 base class for the fixed set of commitment states.
-# Any, Optional        type-hint helpers: Optional[X] means "X or None".
-# dataclass, field     see the READER'S NOTES above.
-# hashlib, json        used together to fingerprint an audit entry (Scene 4).
-# time                 time.time() gives "seconds since 1970" for timestamps.
+# __future__.annotations  stores type hints as text rather than evaluating
+#                         them, so hints like `tuple[str, ...]` cost nothing
+#                         at runtime.
+# dataclass, field        build the record classes in ACT II (see READER'S
+#                         NOTEs above).
+# Enum                    base class for the fixed vocabularies in ACT I.
+# Optional                Optional[X] means "an X, or None".
 # ===========================================================================
 
 from __future__ import annotations
-from enum import Enum
-from typing import Any, Optional
+
 from dataclasses import dataclass, field
-import hashlib
-import json
-import time
+from enum import Enum
+from typing import Optional
 
 
 # ===========================================================================
 # DRAMATIS PERSONAE (every module-level variable, declared here at the top)
 # ---------------------------------------------------------------------------
-# This file has no module-level variables. Its whole cast is the five
-# classes below; nothing outside a class is stored at the top level.
+# This file has three module-level variables, and none of them can be
+# hoisted up here: each is built from members of an Enum class that is
+# defined further down the file, and Python runs a module top to bottom, so
+# the class must exist before the constant can be made. Each one stays
+# directly below the class it depends on, with a comment saying so:
+#
+#   CLOSED_STATES          (after CommitmentState)  the three closed states
+#   EXIT_LEAVES_LOOP_OPEN  (after ExitType)         exits that leave a loop open
+#   EES_ELIGIBLE_KINDS     (after EvidenceKind)     evidence kinds that can be EES
 # ===========================================================================
 
 
+# ---------------------------------------------------------------------------
+# Enumerations
+# ---------------------------------------------------------------------------
+
 # ===========================================================================
-# SCENE 1 — THE FOUR STATES
-# CommitmentState: where, on the road to committing, is the organization?
+# ACT I, SCENE 1 — THE SIX SIGNALS
+# What kinds of coordination signal can enter the commitment process?
+# ===========================================================================
+
+class SignalType(str, Enum):
+    """
+    The six coordination signal types (Layer 1, Rule 1).
+
+    Rule 1 ("Signals Needed for Responsible Action Are Visible") names
+    exactly these six. A FRAMING signal is special: its content is an
+    interpretive frame rather than a technical constraint, and its closure
+    mechanism is frame adoption (Key Definitions, Framing Signal).
+    """
+    CONSTRAINT = "constraint"
+    UNCERTAINTY = "uncertainty"
+    ANOMALY = "anomaly"
+    DISSENT = "dissent"
+    CLASSIFICATION = "classification"
+    FRAMING = "framing"
+
+
+# ===========================================================================
+# ACT I, SCENE 2 — THE FIVE CONDITIONS
+# What condition is the system formally classified as being in?
+# ===========================================================================
+
+class OperationalState(str, Enum):
+    """
+    The five operational states (Rule 2; Key Definitions).
+
+    Rule 2 ("Classification Precedes Action") requires every execution-class
+    decision to have one of these explicitly, and says unvalidated conditions
+    cannot be classified as NOMINAL. Per Key Definitions, a non-nominal state
+    does not itself block execution; it decides which coordination
+    requirements apply.
+    """
+    NOMINAL = "nominal"
+    ELEVATED_UNCERTAINTY = "elevated_uncertainty"
+    OFF_ENVELOPE = "off_envelope"
+    EXPERIMENTAL = "experimental"
+    CONTAINMENT = "containment"
+
+
+# ===========================================================================
+# ACT I, SCENE 3 — THE LIFECYCLE
+# Where is a signal in the Layer 4 commitment state machine?
 # ===========================================================================
 
 class CommitmentState(str, Enum):
     """
-    The four states of the CCL-F commitment state machine.
+    Lifecycle position of a coordination signal (Layer 4, Commitment State
+    Machine). Exited signals carry their ExitType separately.
 
-    OPEN         → signals are visible; no trajectory committed
-    TRAJECTORY   → a direction is locked; alternatives are deprioritized
-    AUTHORITY    → the decision authority has formally closed
-    EXECUTION    → resources are deployed; reversal is operationally costly
-
-    Blocked transitions (structurally enforced in guards.py, not just policy):
-      EXECUTION  → TRAJECTORY   (cannot unspend)
-      AUTHORITY  → OPEN         (authority closure is durable)
-      TRAJECTORY → OPEN         (trajectory lock does not self-reverse)
-      any        → skip a state  (no non-monotonic jumps)
-
-    Because the class inherits from both `str` and `Enum`, each member is
-    also its own string value (see the READER'S NOTE on Enums above).
+    The legal moves between these states live in statemachine.py
+    (TRANSITIONS). Two states deserve a note:
+      TRAJECTORY_LOCK  terminal and distinct from closure; it is how the spec
+                       represents lock-in closure ("the machine deliberately
+                       refuses to represent [it] as any form of closed").
+      EXITED           one state for all fourteen exit types; which type it
+                       was is kept in the signal's ExitRecord, not here.
     """
-    # Each line is one member: NAME = value. The value is the same text as
-    # the name, so the state reads the same in code, logs and JSON.
-    OPEN        = "OPEN"
-    TRAJECTORY  = "TRAJECTORY"
-    AUTHORITY   = "AUTHORITY"
-    EXECUTION   = "EXECUTION"
+    UNREGISTERED = "unregistered"
+    REGISTERED = "registered"
+    CLASSIFIED = "classified"
+    UNDER_REVIEW = "under_review"
+    CLOSED_EVIDENCE = "closed_evidence"
+    CLOSED_AUTHORITY = "closed_authority"
+    CLOSED_ROLE_SWITCH = "closed_role_switch"
+    SUPPRESSED = "suppressed"
+    ESCALATED = "escalated"
+    TRAJECTORY_LOCK = "trajectory_lock"
+    EXITED = "exited"
+
+
+# CLOSED_STATES — the three closed commitment states, one per closure type
+#   that the state machine represents as "closed" (evidence, authority,
+#   role-switch; lock-in is deliberately not among them, see above). Used to
+#   ask "is this signal closed?" in one membership test, and by
+#   statemachine.py for the blocked-closure and reopen rules ("Closed states
+#   are stable but not terminal").
+#   Cannot move to DRAMATIS PERSONAE: it is built from CommitmentState
+#   members, and that class is only defined just above.
+CLOSED_STATES = frozenset({
+    CommitmentState.CLOSED_EVIDENCE,
+    CommitmentState.CLOSED_AUTHORITY,
+    CommitmentState.CLOSED_ROLE_SWITCH,
+})
 
 
 # ===========================================================================
-# SCENE 2 — THE EVIDENCE
-# Evidence: one item shown to the agent, and is it good enough to count?
+# ACT I, SCENE 4 — FOURTEEN WAYS TO LEAVE
+# How did a loop end without genuine closure?
 # ===========================================================================
 
-@dataclass
+class ExitType(str, Enum):
+    """
+    The fourteen loop exit types (Layer 2, Loop Exit Taxonomy).
+
+    An exit is how a loop ends *without* genuine evidence-based closure:
+    abandoned, suspended, transferred or terminated. Per the taxonomy, the
+    exit type decides what obligations survive the exit, what audit trail
+    is required, and whether the loop can be re-entered (see
+    statemachine.reentry_allowed).
+    """
+    TERMINAL = "terminal"
+    CONTAINMENT = "containment"
+    RECOVERABLE = "recoverable"
+    SUPERSEDED = "superseded"
+    DELEGATED = "delegated"
+    DEFERRED = "deferred"
+    FORCED = "forced"
+    EXHAUSTION = "exhaustion"
+    BOUNDARY = "boundary"
+    TIMEOUT = "timeout"
+    AMBIGUITY = "ambiguity"
+    WHISTLEBLOWER = "whistleblower"
+    LEGAL = "legal"
+    KEY_PERSON = "key_person"
+
+
+# EXIT_LEAVES_LOOP_OPEN — exit types after which the loop still counts as
+#   open. Read by Signal.is_open below, so an exited-but-unresolved loop
+#   still blocks an irreversible gate (Reversibility Logic).
+#   Cannot move to DRAMATIS PERSONAE: it is built from ExitType members,
+#   and that class is only defined just above.
+# Exit types whose "Loop State After" in the v0.2 Loop Exit Taxonomy is open
+# (quarantined, paused, delegated, parked, ownerless or non-closable): the
+# hazard the loop named is still unresolved, so the loop still counts as open.
+EXIT_LEAVES_LOOP_OPEN = frozenset({
+    ExitType.CONTAINMENT, ExitType.RECOVERABLE, ExitType.DELEGATED, ExitType.DEFERRED,
+    ExitType.FORCED, ExitType.EXHAUSTION, ExitType.BOUNDARY, ExitType.AMBIGUITY,
+    ExitType.KEY_PERSON,
+})
+
+
+# ===========================================================================
+# ACT I, SCENE 5 — WHEN THE LAW STEPS IN
+# Which kind of external authority produced a legal exit?
+# ===========================================================================
+
+class LegalSubtype(str, Enum):
+    """
+    The four legal-exit sub-types (Loop Exit Taxonomy notes).
+
+    The Layer 4 listing says regulatory intervention and investigative hold
+    "may resume to under_review when lifted", while judicial orders and
+    statutory triggers depend on the order; statemachine.py encodes that.
+    """
+    REGULATORY_INTERVENTION = "regulatory_intervention"
+    JUDICIAL_ORDER = "judicial_order"
+    STATUTORY_TRIGGER = "statutory_trigger"
+    INVESTIGATIVE_HOLD = "investigative_hold"
+
+
+# ===========================================================================
+# ACT I, SCENE 6 — HOW A LOOP WAS CLOSED
+# On what basis was a closure recorded?
+# ===========================================================================
+
+class ClosureType(str, Enum):
+    """
+    The four closure types (Layer 2, Closure Quality).
+
+      EVIDENCE     new data or analysis resolves the constraint     — valid
+      AUTHORITY    a senior agent overrides without new evidence   — flagged
+      ROLE_SWITCH  the same agent closes their own signal by
+                   changing roles                                   — flagged
+      LOCK_IN      authorization despite unresolved contradiction  — flagged,
+                   trajectory lock indicator
+    """
+    EVIDENCE = "evidence"
+    AUTHORITY = "authority"
+    ROLE_SWITCH = "role_switch"
+    LOCK_IN = "lock_in"
+
+
+# ===========================================================================
+# ACT I, SCENE 7 — WHERE EVIDENCE COMES FROM
+# What kind of process produced this evidence, and can it be independent?
+# ===========================================================================
+
+class EvidenceKind(str, Enum):
+    """
+    What kind of process produced a piece of evidence. Used for the External
+    Evidence Source test (Layer 2, EES): the first four kinds can qualify;
+    model output never does ("multiple LLM instances ... do not constitute
+    independent evidence").
+
+    The first four mirror the spec's "What qualifies" list (formal or
+    symbolic verification, primary source documents, direct measurement,
+    evaluation by an independent party). A qualifying kind is necessary but
+    not sufficient: the supervisor also checks that the evidence was not
+    produced by the process under evaluation or by the signal's registrant.
+    """
+    PRIMARY_DOCUMENT = "primary_document"
+    DIRECT_MEASUREMENT = "direct_measurement"
+    FORMAL_VERIFICATION = "formal_verification"
+    INDEPENDENT_PARTY = "independent_party"
+    INTERNAL_ANALYSIS = "internal_analysis"
+    ASSERTION = "assertion"
+    MODEL_OUTPUT = "model_output"
+
+
+# EES_ELIGIBLE_KINDS — the evidence kinds that *can* count as an External
+#   Evidence Source. The supervisor's is_ees() checks membership here first.
+#   INTERNAL_ANALYSIS, ASSERTION and MODEL_OUTPUT are left out on purpose.
+#   Cannot move to DRAMATIS PERSONAE: it is built from EvidenceKind members,
+#   and that class is only defined just above.
+EES_ELIGIBLE_KINDS = frozenset({
+    EvidenceKind.PRIMARY_DOCUMENT,
+    EvidenceKind.DIRECT_MEASUREMENT,
+    EvidenceKind.FORMAL_VERIFICATION,
+    EvidenceKind.INDEPENDENT_PARTY,
+})
+
+
+# ===========================================================================
+# ACT I, SCENE 8 — TWO MASTERS
+# Which referent is an agent consulting when they register or close?
+# ===========================================================================
+
+class Referent(str, Enum):
+    """
+    The two referents of Rule 5.3 (Dual Referent Divergence): the technical
+    reality versus the customer as a contracting party. Role-switch closure is
+    closing a signal by consulting a different referent than the one that
+    generated it, with nothing new from either.
+
+    The supervisor records ROLE_SWITCH when the closer is the registrant and
+    the closer's referent differs from the registrant's (Key Definitions,
+    Role-Switch Closure).
+    """
+    TECHNICAL = "technical"
+    CUSTOMER = "customer"
+
+
+# ===========================================================================
+# ACT I, SCENE 9 — HOW MUCH IS AT STAKE
+# Which execution gate applies to a decision?
+# ===========================================================================
+
+class ExecutionClass(str, Enum):
+    """
+    Execution classes for gating (Layer 4, Execution Gates).
+
+      IRREVERSIBLE  no open constraint loops; classification stabilized;
+                    recurrence groups reviewed; minimum evidence closure
+                    ratio met
+      ELEVATED      classification acknowledged; open loops documented
+      ROUTINE       signal registration complete
+    """
+    IRREVERSIBLE = "irreversible"
+    ELEVATED = "elevated"
+    ROUTINE = "routine"
+
+
+# ===========================================================================
+# ACT I, SCENE 10 — THE ALARMS
+# Which conditions automatically escalate to structural review?
+# ===========================================================================
+
+class EscalationCondition(str, Enum):
+    """
+    The nine automatic escalation conditions (Layer 2).
+
+    One member per bullet of the Escalation Conditions list, in the spec's
+    order: recurrence threshold (Rule 7); off-envelope or containment
+    classification; authority-closure count on an irreversible decision;
+    role-switch closure on a constraint; lock-in with open constraints;
+    suppression before execution; framing adopted over open constraints;
+    credibility discounting; and repeated sender discount (AP-G).
+    """
+    RECURRENCE_THRESHOLD = "recurrence_threshold"
+    OFF_ENVELOPE_OR_CONTAINMENT = "off_envelope_or_containment"
+    AUTHORITY_CLOSURE_COUNT = "authority_closure_count"
+    ROLE_SWITCH_ON_CONSTRAINT = "role_switch_on_constraint"
+    LOCK_IN_WITH_OPEN_CONSTRAINTS = "lock_in_with_open_constraints"
+    SUPPRESSED_BEFORE_EXECUTION = "suppressed_before_execution"
+    FRAMING_ADOPTED_OVER_OPEN_CONSTRAINTS = "framing_adopted_over_open_constraints"
+    CREDIBILITY_DISCOUNTING = "credibility_discounting"
+    SENDER_DISCOUNT_RECURRENCE = "sender_discount_recurrence"
+
+
+# ---------------------------------------------------------------------------
+# Records
+# ---------------------------------------------------------------------------
+
+# ===========================================================================
+# ACT II, SCENE 1 — THE EXHIBIT
+# Evidence: one permanent item of evidence
+# ===========================================================================
+
+@dataclass(frozen=True)
 class Evidence:
     """
-    A single piece of evidence presented to the agent.
+    One item of evidence.
+
+    `produced_by` names the process that generated it; the EES test asks
+    whether that process shares causal ancestry with the process under
+    evaluation. `at` is the logical time it entered the record (the
+    supervisor's clock), which the novelty test compares with registration.
 
     Fields:
-        evidence_id          a short identifier chosen by the caller
-        content              the text of the evidence itself
-        source               where it came from (a report, a person, ...)
-        timestamp            when this object was created (seconds since 1970);
-                             filled in automatically by default_factory
-        novelty_score        0.0–1.0, how new this is; None = not yet scored
-        independence_score   0.0–1.0, how independent of earlier evidence;
-                             None = not yet scored
+      evidence_id   unique name for this item
+      content       what the evidence says
+      source        where it came from (a document, an instrument, a party)
+      kind          an EvidenceKind; decides whether it can be EES at all
+      produced_by   the process that generated it (EES independence test)
+      at            supervisor clock tick when it was added (Evidence Novelty)
 
-    The two scores start as None and are filled in by the evidence_intake
-    LLM node in nodes.py.
+    Frozen: once recorded, evidence cannot be edited.
     """
     evidence_id: str
     content: str
     source: str
-    timestamp: float = field(default_factory=time.time)
-    # Novelty / independence scores set by the LLM node
-    novelty_score: Optional[float] = None       # 0.0–1.0; None = not yet evaluated
-    independence_score: Optional[float] = None  # 0.0–1.0; None = not yet evaluated
-
-    # -----------------------------------------------------------------------
-    # SCENE 2, PART 1 — THE ADMISSION TEST
-    # is_admissible(): does this evidence count toward a decision?
-    # -----------------------------------------------------------------------
-    def is_admissible(self) -> bool:
-        """
-        Evidence must clear both novelty AND independence guards.
-
-        Enter:   (none besides self)
-        Exit:    True only if both scores have been set and both are >= 0.5;
-                 False if either score is missing or below 0.5
-        """
-        # --- Not yet scored ---------------------------------------------
-        # Unscored evidence is never admissible: we do not guess.
-        if self.novelty_score is None or self.independence_score is None:
-            return False
-        # --- Both thresholds must pass ------------------------------------
-        return self.novelty_score >= 0.5 and self.independence_score >= 0.5
+    kind: EvidenceKind
+    produced_by: str
+    at: int = 0
 
 
 # ===========================================================================
-# SCENE 3 — THE HIDDEN STATE
-# ACSEstimate: what does the agent believe the true commitment state is?
+# ACT II, SCENE 2 — THE CLOSURE ON RECORD
+# ClosureRecord: one typed closure (or attempted closure)
 # ===========================================================================
 
-@dataclass
-class ACSEstimate:
+@dataclass(frozen=True)
+class ClosureRecord:
     """
-    Probability distribution over CommitmentStates inferred from behavioral signals.
-    The agent cannot observe ACS directly; it maintains this distribution.
-
-    ACS stands for Authority Commitment Signal. An organization may have
-    *really* committed before it says so in public, so the agent keeps a
-    belief over all four states instead of a single answer.
+    A typed closure (or attempted closure) event on a signal.
 
     Fields:
-        p_open, p_trajectory, p_authority, p_execution
-                     probability of each state (a fresh estimate is
-                     100% OPEN, 0% everything else)
-        confidence   0.0–1.0, how sure the inference node is of this estimate
-        reasoning    the inference node's explanation, in words
+      record_id        unique id for this closure ("C1", "C2", ...)
+      signal_id        the signal it closes
+      closure_type     a ClosureType (Layer 2, Closure Quality)
+      closed_by        the agent who closed it
+      closer_referent  which Referent the closer consulted, or None
+      evidence_ids     the evidence cited (a tuple, so it cannot change)
+      rationale        the stated reason
+      at               supervisor clock tick
+      attempted_only   True when the closer was outside the signal's closure
+                       authority: per Key Definitions, an attempted closure
+                       "is recorded as a coordination event but does not
+                       constitute loop resolution"
+      supersedes       id of an earlier record this one replaces, else None
+                       (nothing in this package sets it yet; reopen() logs
+                       the superseded record id in the audit trail instead)
 
-    The acs_inference node in nodes.py replaces these numbers each cycle.
+    Frozen because reopening "does not erase the original closure record"
+    (Commitment State Machine): a reopen adds history, it never edits it.
+    `tuple[str, ...]` means "a tuple of any length whose items are str".
     """
-    p_open: float       = 1.0
-    p_trajectory: float = 0.0
-    p_authority: float  = 0.0
-    p_execution: float  = 0.0
-    confidence: float   = 0.0
-    reasoning: str      = ""
-
-    # -----------------------------------------------------------------------
-    # SCENE 3, PART 1 — THE BEST GUESS
-    # most_likely(): which single state has the highest probability?
-    # -----------------------------------------------------------------------
-    def most_likely(self) -> CommitmentState:
-        """
-        Return the state with the highest probability.
-
-        Enter:   (none besides self)
-        Exit:    the CommitmentState whose p_* field is largest
-        """
-        # PLAYERS IN THIS SCENE
-        #   probs   a dict from each CommitmentState to its probability
-
-        # --- Pair each state with its number ----------------------------
-        probs = {
-            CommitmentState.OPEN:       self.p_open,
-            CommitmentState.TRAJECTORY: self.p_trajectory,
-            CommitmentState.AUTHORITY:  self.p_authority,
-            CommitmentState.EXECUTION:  self.p_execution,
-        }
-        # --- Pick the winner -----------------------------------------------
-        # max() over a dict walks its keys. `key=probs.get` tells max() to
-        # compare each key by its value (probs.get(state)) instead of by the
-        # key itself. On a tie, max() keeps the first key it saw, so the
-        # earlier state in the list above wins.
-        return max(probs, key=probs.get)
+    record_id: str
+    signal_id: str
+    closure_type: ClosureType
+    closed_by: str
+    closer_referent: Optional[Referent]
+    evidence_ids: tuple[str, ...]
+    rationale: str
+    at: int
+    attempted_only: bool = False
+    supersedes: Optional[str] = None
 
 
 # ===========================================================================
-# SCENE 4 — THE LEDGER LINE
-# AuditEntry: one record in the log that nobody can quietly edit later
+# ACT II, SCENE 3 — THE DEPARTURE ON RECORD
+# ExitRecord: one registered loop exit and its obligations
+# ===========================================================================
+
+@dataclass(frozen=True)
+class ExitRecord:
+    """
+    A registered loop exit, carrying its exit-type obligations.
+
+    Fields (the optional ones answer the spec's "Exit obligations"):
+      signal_id         the signal that exited
+      exit_type         an ExitType
+      by                the agent who registered the exit
+      rationale         the stated reason
+      open_loop_state   the loop's state at exit ("Terminal, legal, and key
+                        person exits require explicit notation of the open
+                        loop state at the time of exit")
+      at                supervisor clock tick
+      successor         new steward ("Delegated exits require successor
+                        registration before the exit is valid")
+      external_pathway  for whistleblower exits, the external escalation path
+      suppression_ref   for whistleblower exits, the suppression event that
+                        triggered it
+      legal_subtype     for legal exits, which LegalSubtype applies
+    """
+    signal_id: str
+    exit_type: ExitType
+    by: str
+    rationale: str
+    open_loop_state: str
+    at: int
+    successor: Optional[str] = None
+    external_pathway: Optional[str] = None
+    suppression_ref: Optional[str] = None
+    legal_subtype: Optional[LegalSubtype] = None
+
+
+# ===========================================================================
+# ACT II, SCENE 4 — THE PROTAGONIST
+# Signal: a coordination signal, its current state and its whole history
 # ===========================================================================
 
 @dataclass
-class AuditEntry:
+class Signal:
     """
-    One entry in the append-only audit log.
-    Each entry hashes its own content + the previous entry's hash,
-    producing a tamper-evident chain.
+    A coordination signal: a safety-relevant input that has entered the
+    commitment process and requires evidence-based closure before
+    irreversible execution (Key Definitions).
+
+    Fields set at registration:
+      signal_id, signal_type, description
+      registered_by             the registering agent
+      registrant_referent       which Referent they registered from
+      evaluated_process         the process the signal is about; evidence
+                                produced by it is not EES
+      steward, successor        the named steward and registered successor
+                                (Key Definitions, Steward; AP.1a / AP.1b)
+      closure_authority         agents allowed to close it; empty means any.
+                                A closer outside it only *attempts* closure
+      recurrence_group          the Recurrence Group it belongs to (Rule 7)
+      failure_mode              the failure mode it names (Layer 0 checks)
+
+    Fields the supervisor updates as events happen:
+      state                     its CommitmentState
+      operational_state         its OperationalState once classified
+      registered_at             clock tick of registration (-1 = not yet)
+      review_opened_at          clock tick review last opened (-1 = never)
+      classification_history    (tick, state) pairs; used to judge whether
+                                classification was stable (Rule 3)
+      evidence_ids              evidence linked to this signal
+      evidence_at_registration  evidence already present at registration;
+                                such evidence fails Evidence Novelty
+      closures                  every ClosureRecord, including attempted
+                                and superseded ones (nothing is erased)
+      exit                      its ExitRecord, if it exited
+      suppression_events        clock ticks at which it was suppressed
+      reopen_count              how many times it has been reopened; the
+                                spec calls this history "itself a
+                                coordination signal"
+
+    Not frozen: the supervisor changes these fields in place.
+    """
+    signal_id: str
+    signal_type: SignalType
+    description: str
+    registered_by: str
+    registrant_referent: Referent
+    evaluated_process: str
+    steward: Optional[str] = None
+    successor: Optional[str] = None
+    # A frozenset() default is safe without default_factory because it is
+    # immutable: sharing one empty frozenset between all signals is harmless.
+    closure_authority: frozenset[str] = frozenset()
+    recurrence_group: Optional[str] = None
+    failure_mode: Optional[str] = None
+    state: CommitmentState = CommitmentState.UNREGISTERED
+    operational_state: Optional[OperationalState] = None
+    registered_at: int = -1
+    review_opened_at: int = -1
+    # Mutable lists need default_factory so each Signal gets its own list.
+    classification_history: list[tuple[int, OperationalState]] = field(default_factory=list)
+    evidence_ids: list[str] = field(default_factory=list)
+    evidence_at_registration: frozenset[str] = frozenset()
+    closures: list[ClosureRecord] = field(default_factory=list)
+    exit: Optional[ExitRecord] = None
+    suppression_events: list[int] = field(default_factory=list)
+    reopen_count: int = 0
+
+    # -----------------------------------------------------------------------
+    # ACT II, SCENE 4a — IS THE LOOP STILL OPEN?
+    # -----------------------------------------------------------------------
+    @property
+    def is_open(self) -> bool:
+        """
+        Open = registered and not resolved: not closed, not latched in
+        trajectory lock, and not exited by an exit type that ends the loop.
+        Exits that leave the loop open (EXIT_LEAVES_LOOP_OPEN) still count.
+
+        Enter:   (none; read as `sig.is_open`, no parentheses)
+        Exit:    True if the loop is open, else False
+
+        Trajectory lock is not open: per Layer 4 it is a terminal marker that
+        the loop "remained open at the point irreversible execution
+        proceeded" — the gate logic counts it separately.
+        """
+        # --- Exited: open only if the exit type leaves the loop open -------
+        if self.state == CommitmentState.EXITED:
+            return self.exit is not None and self.exit.exit_type in EXIT_LEAVES_LOOP_OPEN
+        # --- Otherwise: open unless closed, locked, or never registered ----
+        return (self.state not in CLOSED_STATES
+                and self.state not in (CommitmentState.TRAJECTORY_LOCK,
+                                       CommitmentState.UNREGISTERED))
+
+    # -----------------------------------------------------------------------
+    # ACT II, SCENE 4b — IS IT A CONSTRAINT?
+    # -----------------------------------------------------------------------
+    @property
+    def is_constraint(self) -> bool:
+        """
+        Is this a constraint signal?
+
+        Enter:   (none)
+        Exit:    True for SignalType.CONSTRAINT
+
+        The irreversible gate requires "No open constraint loops", so the
+        supervisor asks this often.
+        """
+        return self.signal_type == SignalType.CONSTRAINT
+
+    # -----------------------------------------------------------------------
+    # ACT II, SCENE 4c — DOES IT NAME A HIGH-CONSEQUENCE FAILURE MODE?
+    # -----------------------------------------------------------------------
+    @property
+    def high_consequence(self) -> bool:
+        """
+        Constraint and anomaly signals name a high-consequence failure mode (D9).
+
+        Enter:   (none)
+        Exit:    True for CONSTRAINT and ANOMALY signals
+
+        AP.1b and AP-A speak of "high-consequence failure modes". Under
+        implementation decision D9 (which Layer 0 sub-conditions a runtime
+        can check), these two signal types are treated as naming one, and
+        Supervisor.architecture_check skips the others.
+        """
+        return self.signal_type in (SignalType.CONSTRAINT, SignalType.ANOMALY)
+
+    # -----------------------------------------------------------------------
+    # ACT II, SCENE 4d — WHICH FAILURE MODE?
+    # -----------------------------------------------------------------------
+    @property
+    def mode(self) -> str:
+        """
+        The failure mode used for Layer 0 checks.
+
+        Enter:   (none)
+        Exit:    failure_mode if set, else recurrence_group, else signal_id
+
+        `a or b or c` returns the first value that is "truthy" (not None and
+        not ""), so a signal with no named failure mode or group stands for
+        its own failure mode. Architecture's dicts are keyed by this value.
+        """
+        return self.failure_mode or self.recurrence_group or self.signal_id
+
+
+# ===========================================================================
+# ACT II, SCENE 5 — THE DECISION
+# Decision: an execution-class decision node awaiting its gate
+# ===========================================================================
+
+@dataclass
+class Decision:
+    """
+    An execution-class decision node. Rule 4 requires a single agent to
+    accept authorization, risk acceptance and rationale; `accepted_by` holds
+    that agent once they have.
 
     Fields:
-        sequence     position of this entry in the log (0, 1, 2, ...)
-        event_type   a short label such as "HUMAN_REVIEW" or "TRANSITION_APPLIED"
-        from_state   the state before a transition, or None if not a transition
-        to_state     the state after a transition, or None if not a transition
-        payload      a dict of event details
-        timestamp    when the entry was created (filled in automatically)
-        prev_hash    entry_hash of the entry before this one ("GENESIS" for the
-                     first entry, as supplied by CCLFAgentState.append_audit)
-        entry_hash   this entry's own fingerprint (see below)
-
-    How the hash chain works
-    ------------------------
-    A hash (here SHA-256) turns any input into a fixed 64-character
-    fingerprint. Change a single character of the input and the fingerprint
-    changes completely. Each entry's fingerprint covers its own fields *and*
-    prev_hash, the fingerprint of the entry before it. So if someone edits
-    entry 3, its fingerprint no longer matches what entry 4 recorded as
-    prev_hash, and the chain visibly breaks from that point on. That is what
-    "tamper-evident" means: tampering is not prevented, but it is detectable.
-
-    Why a restored entry recomputes its hash and rejects a mismatch
-    ---------------------------------------------------------------
-    A brand-new entry is built with entry_hash left at "", and __post_init__
-    simply fills it in. But an entry can also be *rebuilt* from saved data,
-    for example when the LangGraph checkpointer loads a paused run back
-    into memory: then every field, entry_hash included, is passed back in.
-    If __post_init__ trusted that stored entry_hash, someone could edit the
-    payload in storage and the entry would come back looking genuine. So
-    the hash is always recomputed from the fields, and if a stored hash was
-    supplied and it differs, the entry refuses to exist (ValueError).
+      decision_id            unique name
+      description            what is being decided
+      execution_class        which Execution Gate applies (ExecutionClass)
+      signal_ids             the signals this decision rests on
+      accepted_by            the Rule 4 accepting agent, or None until then
+      acceptance_rationale   their documented rationale ("" until accepted)
+      executed               True once the gate has let it execute
     """
-    sequence:    int
-    event_type:  str
-    from_state:  Optional[CommitmentState]
-    to_state:    Optional[CommitmentState]
-    payload:     dict[str, Any]
-    timestamp:   float = field(default_factory=time.time)
-    prev_hash:   str   = ""
-    # Computed from the fields above. Accepted as an argument only so an
-    # entry can be rebuilt from a checkpoint; a supplied value that does not
-    # match the recomputed hash is rejected as tampering.
-    entry_hash:  str   = ""
-
-    # -----------------------------------------------------------------------
-    # SCENE 4, PART 1 — THE SEAL
-    # __post_init__(): stamp a new entry, or verify a rebuilt one
-    # -----------------------------------------------------------------------
-    def __post_init__(self):
-        """
-        Set entry_hash, checking any value that was passed in.
-
-        Enter:   (none besides self; runs automatically right after the
-                 dataclass-generated __init__ has stored every field)
-        Exit:    self.entry_hash holds the freshly computed hash
-                 raises ValueError if a non-empty entry_hash was supplied and
-                 it does not match the entry's contents
-
-        __post_init__ is a dataclass hook: if a class defines it, the
-        generated __init__ calls it last, giving us a place for extra setup.
-        """
-        # PLAYERS IN THIS SCENE
-        #   expected   the hash these fields *should* have
-
-        expected = self._compute_hash()
-
-        # --- Verify a restored entry -------------------------------------
-        # An empty entry_hash means "new entry, nothing to check". A
-        # non-empty one came from saved data and must match exactly.
-        if self.entry_hash and self.entry_hash != expected:
-            raise ValueError(
-                f"Audit entry {self.sequence} failed integrity check: "
-                "stored hash does not match its contents"
-            )
-
-        # --- Seal the entry ----------------------------------------------
-        self.entry_hash = expected
-
-    # -----------------------------------------------------------------------
-    # SCENE 4, PART 2 — THE FINGERPRINT
-    # _compute_hash(): what is the SHA-256 fingerprint of this entry?
-    # -----------------------------------------------------------------------
-    def _compute_hash(self) -> str:
-        """
-        Compute this entry's SHA-256 hash from its fields.
-
-        Enter:   (none besides self)
-        Exit:    a 64-character hexadecimal string
-
-        Every field except entry_hash itself goes into the fingerprint
-        (a hash cannot include itself).
-        """
-        # PLAYERS IN THIS SCENE
-        #   blob   the entry's fields written out as one JSON string
-
-        # --- Write the fields out in a fixed form --------------------------
-        # A hash needs the exact same bytes every time for the same content.
-        # sort_keys=True writes the dict keys in alphabetical order, so the
-        # text never depends on the order the dict happened to be built in.
-        # The states are str-Enums, so json writes them as plain "OPEN" etc.
-        blob = json.dumps({
-            "seq":        self.sequence,
-            "event":      self.event_type,
-            "from":       self.from_state,
-            "to":         self.to_state,
-            "payload":    self.payload,
-            "ts":         self.timestamp,
-            "prev_hash":  self.prev_hash,
-        }, sort_keys=True)
-
-        # --- Hash it ------------------------------------------------------
-        # .encode() turns text into bytes (hashlib only accepts bytes);
-        # .hexdigest() returns the result as readable hex characters.
-        return hashlib.sha256(blob.encode()).hexdigest()
+    decision_id: str
+    description: str
+    execution_class: ExecutionClass
+    signal_ids: list[str]
+    accepted_by: Optional[str] = None
+    acceptance_rationale: str = ""
+    executed: bool = False
 
 
 # ===========================================================================
-# SCENE 5 — THE TRAVELLING TRUNK
-# CCLFAgentState: everything the graph carries from one node to the next
+# ACT II, SCENE 6 — THE STAGE ITSELF
+# Architecture: the registered Layer 0 coordination architecture
 # ===========================================================================
 
 @dataclass
-class CCLFAgentState:
+class Architecture:
     """
-    The complete mutable state passed between LangGraph nodes.
-    LangGraph requires state to be serialisable; all fields use basic types
-    or dataclasses that can be converted to dicts.
+    The registered coordination architecture (Layer 0) for the failure modes
+    a decision depends on. Only the sub-conditions a runtime can check from
+    registered facts are modelled; see docs/DECISIONS.md.
 
-    Each node in nodes.py receives this object, reads and changes some of
-    its fields, and returns it. graph.py hands it to StateGraph so LangGraph
-    knows which fields exist. The fields are described one by one below.
-    Lists and the ACSEstimate use default_factory so that every new state
-    gets its own copies (see the READER'S NOTE at the top of the file).
+    Each field is a dict keyed by failure mode (Signal.mode) or channel name:
+      stewards            failure mode -> steward          (AP.1a / AP-A)
+      successors          failure mode -> successor        (AP.1b)
+      channels_tested     channel -> tested under load?    (AP.2: "Untested
+                                                            channels are
+                                                            treated as absent")
+      reporters           failure mode -> parties who can report to decision
+                          authority                        (AP-F)
+      interested_parties  failure mode -> parties structurally interested in
+                          denying it                       (AP-F: Captured
+                                                            Channel)
+
+    Every field uses field(default_factory=dict) so each Architecture gets
+    its own empty dict (see READER'S NOTE above).
     """
-    # Current formal commitment state
-    commitment_state: CommitmentState = CommitmentState.OPEN
-
-    # Evidence buffer (presented this session)
-    evidence_buffer: list[Evidence] = field(default_factory=list)
-
-    # ACS hidden-state estimate (updated by inference node)
-    acs_estimate: ACSEstimate = field(default_factory=ACSEstimate)
-
-    # Proposed transition (set by evaluation node, consumed by guard node)
-    proposed_transition: Optional[CommitmentState] = None
-
-    # Human-in-the-loop verdict (set by the human_review node, or written in
-    # by an outside approval system while the graph is paused before it).
-    # None means "no decision recorded yet"; True / False is the verdict.
-    # apply_transition clears all three once the decision has been used, so
-    # a decision can never carry over into the next review by accident.
-    human_approval: Optional[bool] = None
-    human_rationale: str = ""
-    # Who decided: a reviewer ID from the outside system, the local user
-    # name for an interactive decision, or "auto" in unattended mode.
-    # CCL-F v0.2 requires every override to record the deciding agent's
-    # identity (Layer 4, Execution Gates), so it goes into the audit log.
-    human_reviewer: str = ""
-
-    # Audit log — a list of AuditEntry objects, each chained to the one before
-    audit_log: list[AuditEntry] = field(default_factory=list)
-
-    # ACO flag — Adversarial Commitment Opacity detected
-    aco_detected: bool = False
-    aco_reasoning: str = ""
-
-    # Free-form messages from nodes (for visibility / debugging)
-    messages: list[str] = field(default_factory=list)
-
-    # Termination signal
-    should_terminate: bool = False
-
-    # -----------------------------------------------------------------------
-    # SCENE 5, PART 1 — THE TRANSLATOR
-    # from_stream(): turn whatever LangGraph handed back into a state object
-    # -----------------------------------------------------------------------
-    @classmethod
-    def from_stream(cls, chunk: Any) -> "CCLFAgentState":
-        """
-        Normalise a graph.stream(stream_mode="values") chunk to a state object.
-        Recent LangGraph versions yield a plain dict of fields for dataclass
-        state; older versions yielded the dataclass itself.
-
-        Enter:   chunk   either a CCLFAgentState already, or a dict whose keys
-                         are this class's field names (from graph.stream(),
-                         graph.invoke() or graph.get_state(...).values)
-        Exit:    a CCLFAgentState
-
-        `@classmethod` means the method receives the class itself as `cls`
-        instead of an instance as `self`. That lets it build a new object
-        with `cls(...)` and is the usual Python way to write an alternative
-        constructor. Callers write CCLFAgentState.from_stream(chunk).
-        """
-        # --- Already the right type: hand it straight back ----------------
-        if isinstance(chunk, cls):
-            return chunk
-
-        # --- A dict of fields: unpack it into the constructor -------------
-        # `cls(**chunk)` turns {"commitment_state": ..., "messages": ...} into
-        # cls(commitment_state=..., messages=...). This is a shallow rebuild:
-        # the values inside the dict (Evidence, AuditEntry, ...) are used as
-        # they are, not converted again.
-        return cls(**chunk)
-
-    # -----------------------------------------------------------------------
-    # SCENE 5, PART 2 — THE LAST LINK
-    # last_audit_hash(): what should the next audit entry chain onto?
-    # -----------------------------------------------------------------------
-    def last_audit_hash(self) -> str:
-        """
-        Return the hash the next audit entry should record as prev_hash.
-
-        Enter:   (none besides self)
-        Exit:    the entry_hash of the newest audit entry, or the marker
-                 string "GENESIS" if the log is still empty
-        """
-        # --- Empty log: the chain starts here ----------------------------
-        # An empty list is "falsy", so `not self.audit_log` is True for [].
-        if not self.audit_log:
-            return "GENESIS"
-        # --- Otherwise: the newest entry ([-1] means "last item") ----------
-        return self.audit_log[-1].entry_hash
-
-    # -----------------------------------------------------------------------
-    # SCENE 5, PART 3 — THE SCRIBE
-    # append_audit(): write one new, correctly chained entry to the log
-    # -----------------------------------------------------------------------
-    def append_audit(self, event_type: str, payload: dict,
-                     from_state: Optional[CommitmentState] = None,
-                     to_state: Optional[CommitmentState] = None) -> None:
-        """
-        Add a new AuditEntry to the end of the audit log.
-
-        Enter:   event_type   short label for what happened
-                 payload      dict of details to record
-                 from_state   state before a transition (optional)
-                 to_state     state after a transition (optional)
-        Exit:    None; self.audit_log grows by one entry
-
-        This is the one place entries are created during a run, so the
-        sequence number and prev_hash are always filled in consistently.
-        """
-        # PLAYERS IN THIS SCENE
-        #   entry   the new AuditEntry, already hashed by its __post_init__
-
-        # --- Build the entry, chained to the previous one -----------------
-        # sequence = current length, so the first entry is 0, the next 1...
-        # entry_hash is left out on purpose: __post_init__ computes it.
-        entry = AuditEntry(
-            sequence=len(self.audit_log),
-            event_type=event_type,
-            from_state=from_state,
-            to_state=to_state,
-            payload=payload,
-            prev_hash=self.last_audit_hash(),
-        )
-
-        # --- Append-only: entries are added, never replaced ---------------
-        self.audit_log.append(entry)
+    stewards: dict[str, str] = field(default_factory=dict)        # failure mode -> steward
+    successors: dict[str, str] = field(default_factory=dict)      # failure mode -> successor
+    channels_tested: dict[str, bool] = field(default_factory=dict)  # channel -> tested under load
+    # failure mode -> parties with a reporting route to decision authority
+    reporters: dict[str, set[str]] = field(default_factory=dict)
+    # failure mode -> parties structurally interested in denying it
+    interested_parties: dict[str, set[str]] = field(default_factory=dict)
 
 # EXEUNT — end of file.
