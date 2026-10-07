@@ -109,10 +109,10 @@ run_demo.py      python run_demo.py {challenger,therac25,mcas}
 
 ## References
 
-Landry, M. *Coordination Control Loop Framework (CCL-F)*, v0.2 working draft. Unpublished, 2026.
+Landry, M. (2026). *Coordination Control Loop Framework (CCL-F)*, Version 0.2. Waterside Net Solutions. Pre-archive working document; no DOI yet assigned. CC BY-NC-ND 4.0.
 
 Leveson, N. G., & Turner, C. S. (1993). An investigation of the Therac-25 accidents. *IEEE Computer*, 26(7), 18–41.
 
 ## License
 
-© Morgan Landry / Waterside Net Solutions. All rights reserved. The source is public for review. No license to use, copy, modify or distribute it is granted.
+© Morgan Landry / Waterside Net Solutions. All rights reserved. The source is public for review. No license to use, copy, modify or distribute it is granted. The CCL-F framework document is licensed separately under CC BY-NC-ND 4.0.
