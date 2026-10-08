@@ -6,14 +6,15 @@ A Play in One Scene
 PROLOGUE
 --------
 CCL-F Backend — Anthropic API (Claude).
-Uses claude-sonnet-4-6 by default; set ANTHROPIC_MODEL to override.
+Uses claude-sonnet-5-5 by default; set ANTHROPIC_MODEL to override.
 
 This is one of the four backends the registry in backends/__init__.py can
 choose from (CCLF_LLM_BACKEND=anthropic). Like every backend, it offers
 exactly one function, get_llm(), that returns a LangChain chat model.
 
-The advisor and the eval both ask for a JSON-only reply, so a low
-temperature is used to keep replies consistent and parseable.
+The advisor and the eval both ask for a JSON-only reply. No temperature is
+sent unless CCLF_TEMPERATURE is set: Claude Sonnet 5.5 rejects any
+non-default temperature with a 400 error.
 
 COMPLIANCE WARNING: Not suitable for PHI or hospital production use without
 an executed Anthropic BAA and architecture review. See COMPLIANCE.md.
@@ -22,7 +23,8 @@ For HIPAA-eligible Claude deployment, use the 'bedrock' backend instead
 
 Required env vars:
   ANTHROPIC_API_KEY
-  ANTHROPIC_MODEL     (optional, default: claude-sonnet-4-6)
+  ANTHROPIC_MODEL     (optional, default: claude-sonnet-5-5)
+  CCLF_TEMPERATURE    (optional; see backends/__init__.py, Scene 4)
 
 THE PLAYBILL (what happens in this file)
     Scene 1  get_llm()   build a ChatAnthropic model from environment settings
@@ -39,11 +41,14 @@ READER'S NOTE
 # ---------------------------------------------------------------------------
 # os        reads environment variables (os.environ).
 # logging   used to warn when the API key is missing.
+# sampling_kwargs   the temperature setting, only if CCLF_TEMPERATURE is set.
 # ===========================================================================
 
 from __future__ import annotations
 import os
 import logging
+
+from . import sampling_kwargs
 
 
 # ===========================================================================
@@ -66,7 +71,8 @@ def get_llm():
 
     Enter:   (no arguments; settings come from environment variables)
     Exit:    a ChatAnthropic configured with ANTHROPIC_MODEL (default
-             "claude-sonnet-4-6"), temperature 0.1 and ANTHROPIC_API_KEY
+             "claude-sonnet-5-5"), ANTHROPIC_API_KEY, and a temperature only
+             if CCLF_TEMPERATURE is set
              raises ImportError if langchain-anthropic is not installed
 
     A missing API key is only logged as a warning here, not raised. The
@@ -88,7 +94,7 @@ def get_llm():
         )
 
     # --- Read settings from the environment ----------------------------------
-    model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+    model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5")
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
     # --- Warn, but do not stop, if the key is missing ------------------------
@@ -96,12 +102,12 @@ def get_llm():
         logger.warning("[cclf-backend/anthropic] ANTHROPIC_API_KEY not set.")
 
     # --- Build the model -----------------------------------------------------
-    # A low temperature (0.1) makes replies less random, so the
-    # advisor gets consistent, parseable JSON.
+    # `**sampling_kwargs()` adds temperature=... only if CCLF_TEMPERATURE is
+    # set (Scene 4 of backends/__init__.py).
     return ChatAnthropic(
         model=model,
-        temperature=0.1,
         api_key=api_key,
+        **sampling_kwargs(),
     )
 
 # EXEUNT — end of file.

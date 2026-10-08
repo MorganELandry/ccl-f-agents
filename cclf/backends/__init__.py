@@ -35,14 +35,22 @@ Required environment variables per backend:
   azure:
     AZURE_OPENAI_API_KEY
     AZURE_OPENAI_ENDPOINT          e.g. https://<resource>.openai.azure.com/
-    AZURE_OPENAI_DEPLOYMENT_NAME   e.g. gpt-4o
+    AZURE_OPENAI_DEPLOYMENT_NAME   your deployment's name (not the model's)
     AZURE_OPENAI_API_VERSION       e.g. 2024-02-01
 
   bedrock:
     AWS_ACCESS_KEY_ID
     AWS_SECRET_ACCESS_KEY
     AWS_DEFAULT_REGION             e.g. us-east-1
-    BEDROCK_MODEL_ID               e.g. anthropic.claude-3-5-sonnet-20241022-v2:0
+    BEDROCK_MODEL_ID               default global.anthropic.claude-sonnet-5-5
+
+  every backend (optional):
+    CCLF_TEMPERATURE               a sampling temperature, e.g. 0.1. Unset by
+                                   default: the model's own default is used.
+                                   Some current models (Claude Sonnet 5.5,
+                                   for one) reject any non-default
+                                   temperature with an error, so set this
+                                   only for a model that accepts it.
 
 COMPLIANCE NOTE
 ---------------
@@ -58,6 +66,7 @@ THE PLAYBILL (what happens in this file)
     Scene 1  get_llm()            hand back a chat model for the chosen backend
     Scene 2  active_backend()     which backend is configured by default?
     Scene 3  is_hipaa_eligible()  is a backend routed to BAA-covered hosting?
+    Scene 4  sampling_kwargs()    the temperature setting, if one is asked for
 
 READER'S NOTE — the registry pattern
     A "registry" is one central list of the available options plus one
@@ -208,5 +217,30 @@ def is_hipaa_eligible(backend: str | None = None) -> bool:
 
     target = (backend or _DEFAULT_BACKEND).lower()
     return target in ("azure", "bedrock")
+
+# ===========================================================================
+# SCENE 4 — HOW RANDOM?
+# sampling_kwargs(): the temperature to pass, only if one is asked for.
+# ===========================================================================
+
+def sampling_kwargs() -> dict:
+    """
+    The sampling settings every backend passes to its model.
+
+    Enter:   (none; reads CCLF_TEMPERATURE)
+    Exit:    {"temperature": <float>} if CCLF_TEMPERATURE is set, else {}
+
+    Why empty by default: current models differ. Claude Sonnet 5.5 returns
+    a 400 error for any non-default temperature, and OpenAI's reasoning
+    models document no temperature setting. Leaving it out works with all
+    of them. The advisor and the eval do not depend on it: the advisor
+    falls back to a conservative proposal on an unusable reply, and the
+    eval samples several times per case anyway.
+    """
+    # PLAYERS IN THIS SCENE
+    #   raw   the environment value, if any
+
+    raw = os.environ.get("CCLF_TEMPERATURE", "").strip()
+    return {"temperature": float(raw)} if raw else {}
 
 # EXEUNT — end of file.

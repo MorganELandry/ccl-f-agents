@@ -19,7 +19,7 @@ LangChain chat model.
 Required env vars:
   AZURE_OPENAI_API_KEY
   AZURE_OPENAI_ENDPOINT            e.g. https://<resource>.openai.azure.com/
-  AZURE_OPENAI_DEPLOYMENT_NAME     e.g. gpt-4o  (your deployment name, not model name)
+  AZURE_OPENAI_DEPLOYMENT_NAME     your deployment name, not the model name
   AZURE_OPENAI_API_VERSION         e.g. 2024-02-01
 
 Compliance prerequisites (not enforced in code — must be verified operationally):
@@ -50,11 +50,14 @@ READER'S NOTE
 # ---------------------------------------------------------------------------
 # os        reads environment variables (os.environ).
 # logging   provides this module's logger (declared below).
+# sampling_kwargs   the temperature setting, only if CCLF_TEMPERATURE is set.
 # ===========================================================================
 
 from __future__ import annotations
 import os
 import logging
+
+from . import sampling_kwargs
 
 
 # ===========================================================================
@@ -90,7 +93,7 @@ def get_llm():
     Exit:    an AzureChatOpenAI pointed at AZURE_OPENAI_ENDPOINT, using
              deployment AZURE_OPENAI_DEPLOYMENT_NAME, API version
              AZURE_OPENAI_API_VERSION, key AZURE_OPENAI_API_KEY and
-             temperature 0.1
+             a temperature only if CCLF_TEMPERATURE is set
              raises ImportError if langchain-openai is not installed
              raises EnvironmentError naming every missing setting in _REQUIRED
     """
@@ -126,7 +129,7 @@ def get_llm():
         azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"],
         openai_api_version=os.environ["AZURE_OPENAI_API_VERSION"],
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
-        temperature=0.1,
+        **sampling_kwargs(),
     )
 
 # EXEUNT — end of file.

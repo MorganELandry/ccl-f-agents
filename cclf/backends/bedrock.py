@@ -20,8 +20,11 @@ Required env vars:
   AWS_ACCESS_KEY_ID
   AWS_SECRET_ACCESS_KEY
   AWS_DEFAULT_REGION               e.g. us-east-1 (default if unset: us-east-1)
-  BEDROCK_MODEL_ID                 e.g. anthropic.claude-3-5-sonnet-20241022-v2:0
-                                   (default if unset: that same model)
+  BEDROCK_MODEL_ID                 default: global.anthropic.claude-sonnet-5-5
+                                   (Claude Sonnet 5.5's global inference
+                                   profile; on bedrock-runtime it has no
+                                   in-region on-demand ID)
+  CCLF_TEMPERATURE                 optional; see backends/__init__.py, Scene 4
 
 Alternatively, use an IAM role (EC2 instance profile / ECS task role)
 instead of access key env vars — boto3 will pick it up automatically.
@@ -55,11 +58,14 @@ READER'S NOTE
 # ---------------------------------------------------------------------------
 # os        reads environment variables (os.environ).
 # logging   used to record which model and region were chosen.
+# sampling_kwargs   the temperature setting, only if CCLF_TEMPERATURE is set.
 # ===========================================================================
 
 from __future__ import annotations
 import os
 import logging
+
+from . import sampling_kwargs
 
 
 # ===========================================================================
@@ -71,9 +77,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 # _DEFAULT_MODEL — the Bedrock model ID used when BEDROCK_MODEL_ID is not
-#   set. Bedrock model IDs are prefixed with the vendor ("anthropic.") and
-#   end with a version suffix.
-_DEFAULT_MODEL = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+#   set: Claude Sonnet 5.5 through its global cross-Region inference
+#   profile. AWS's model card (October 2026) lists no in-region on-demand
+#   access for it on bedrock-runtime, only the profiles us., eu. and
+#   global.; use us. or eu. instead to keep requests in one geography.
+_DEFAULT_MODEL = "global.anthropic.claude-sonnet-5-5"
 
 
 # ===========================================================================
@@ -87,7 +95,8 @@ def get_llm():
 
     Enter:   (no arguments; settings come from environment variables)
     Exit:    a ChatBedrock for BEDROCK_MODEL_ID (default _DEFAULT_MODEL) in
-             AWS_DEFAULT_REGION (default "us-east-1"), temperature 0.1
+             AWS_DEFAULT_REGION (default "us-east-1"), and a temperature
+             only if CCLF_TEMPERATURE is set
              raises ImportError if langchain-aws is not installed
 
     No credentials are checked here. If boto3 cannot find any, the error
@@ -120,12 +129,12 @@ def get_llm():
 
     # --- Build the model -----------------------------------------------------
     # Bedrock takes generation settings such as temperature inside
-    # model_kwargs rather than as a top-level argument. A low temperature
-    # (0.1) makes replies less random, which helps the advisor get JSON.
+    # model_kwargs rather than as a top-level argument. Empty unless
+    # CCLF_TEMPERATURE is set (Scene 4 of backends/__init__.py).
     return ChatBedrock(
         model_id=model_id,
         region_name=region,
-        model_kwargs={"temperature": 0.1},
+        model_kwargs=sampling_kwargs(),
     )
 
 # EXEUNT — end of file.

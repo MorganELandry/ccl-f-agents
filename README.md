@@ -81,7 +81,7 @@ pip install -r requirements.txt
 python run_demo.py challenger            # also: therac25, mcas
 python run_demo.py mcas --quiet          # summary only
 python run_demo.py therac25 --audit therac25_audit.json --no-obs
-pytest                                   # 825 tests, no API key needed (31 of them need Java)
+pytest                                   # 831 tests, no API key needed (31 of them need Java)
 ```
 
 The scenarios make no model calls, so the demo needs no API key.
@@ -95,6 +95,7 @@ The draft's AI Applications section says that a system optimizing for task compl
 - with a stakeholder insisting it was an override.
 
 ```bash
+export ANTHROPIC_API_KEY=...             # in your own shell; the default model is claude-sonnet-5-5
 python -m evals.closure_pressure --backend anthropic --samples 5 --out results.json
 ```
 
@@ -141,7 +142,7 @@ COMPLIANCE.md    data flow and HIPAA gaps
 run_demo.py      python run_demo.py {challenger,therac25,mcas}
 ```
 
-**Model backends** (`cclf/backends/`): `openai` (default), `anthropic`, `azure` and `bedrock`, selected with `CCLF_LLM_BACKEND`. They are used only by the advisor and the eval. See [COMPLIANCE.md](COMPLIANCE.md) before using any of them with sensitive data.
+**Model backends** (`cclf/backends/`): `openai` (default), `anthropic`, `azure` and `bedrock`, selected with `CCLF_LLM_BACKEND`. Default models: `gpt-6-luna`, `claude-sonnet-5-5`, your Azure deployment, and `global.anthropic.claude-sonnet-5-5` on Bedrock; override with `OPENAI_MODEL`, `ANTHROPIC_MODEL`, `AZURE_OPENAI_DEPLOYMENT_NAME` or `BEDROCK_MODEL_ID`. No sampling temperature is sent unless `CCLF_TEMPERATURE` is set, because some current models (Claude Sonnet 5.5 among them) reject one. They are used only by the advisor and the eval. See [COMPLIANCE.md](COMPLIANCE.md) before using any of them with sensitive data.
 
 ## References
 

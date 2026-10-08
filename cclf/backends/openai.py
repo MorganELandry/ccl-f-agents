@@ -6,7 +6,7 @@ A Play in One Scene
 PROLOGUE
 --------
 CCL-F Backend — OpenAI API.
-Uses GPT-4o-mini by default; set OPENAI_MODEL to override.
+Uses GPT-6 Luna (gpt-6-luna) by default; set OPENAI_MODEL to override.
 
 This is one of the four backends the registry in backends/__init__.py can
 choose from. It is the default when CCLF_LLM_BACKEND is not set. Like every
@@ -18,7 +18,8 @@ an executed OpenAI BAA and architecture review. See COMPLIANCE.md.
 
 Required env vars:
   OPENAI_API_KEY
-  OPENAI_MODEL        (optional, default: gpt-4o-mini)
+  OPENAI_MODEL        (optional, default: gpt-6-luna)
+  CCLF_TEMPERATURE    (optional; see backends/__init__.py, Scene 4)
 
 THE PLAYBILL (what happens in this file)
     Scene 1  get_llm()   build a ChatOpenAI model from environment settings
@@ -35,11 +36,14 @@ READER'S NOTE
 # ---------------------------------------------------------------------------
 # os        reads environment variables (os.environ).
 # logging   used to warn when the API key is missing.
+# sampling_kwargs   the temperature setting, only if CCLF_TEMPERATURE is set.
 # ===========================================================================
 
 from __future__ import annotations
 import os
 import logging
+
+from . import sampling_kwargs
 
 
 # ===========================================================================
@@ -62,7 +66,8 @@ def get_llm():
 
     Enter:   (no arguments; settings come from environment variables)
     Exit:    a ChatOpenAI configured with OPENAI_MODEL (default
-             "gpt-4o-mini"), temperature 0.1 and OPENAI_API_KEY
+             "gpt-6-luna"), OPENAI_API_KEY, and a temperature only if
+             CCLF_TEMPERATURE is set
              raises ImportError if langchain-openai is not installed
 
     A missing API key is only logged as a warning by this code, not raised.
@@ -87,7 +92,7 @@ def get_llm():
 
     # --- Read settings from the environment ----------------------------------
     # os.environ.get(name, default) returns the default if the variable is unset.
-    model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+    model = os.environ.get("OPENAI_MODEL", "gpt-6-luna")
     api_key = os.environ.get("OPENAI_API_KEY", "")
 
     # --- Warn, but do not stop here, if the key is missing ------------------
@@ -96,12 +101,13 @@ def get_llm():
         logger.warning("[cclf-backend/openai] OPENAI_API_KEY not set.")
 
     # --- Build the model -----------------------------------------------------
-    # A low temperature (0.1) makes replies less random, so the
-    # advisor gets consistent, parseable JSON.
+    # `**sampling_kwargs()` adds temperature=... only if CCLF_TEMPERATURE is
+    # set: current reasoning models may not accept one (Scene 4 of
+    # backends/__init__.py).
     return ChatOpenAI(
         model=model,
-        temperature=0.1,
         api_key=api_key,
+        **sampling_kwargs(),
     )
 
 # EXEUNT — end of file.
