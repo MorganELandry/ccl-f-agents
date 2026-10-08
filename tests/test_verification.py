@@ -1,6 +1,6 @@
 """
 THE MODELS AND THE CODE AGREE
-A Play in Seven Scenes
+A Play in Eight Scenes
 =============================
 
 PROLOGUE
@@ -29,6 +29,7 @@ THE PLAYBILL
     Scene 5  test_tlc_finds_no_violation             (needs Java + TLA2TOOLS_JAR)
     Scene 6  test_tlc_catches_a_forbidden_transition (needs Java + TLA2TOOLS_JAR)
     Scene 7  test_alloy_assertions_hold              (needs Java + ALLOY_JAR)
+    Scene 8  test_tlc_catches_the_old_authority_gate (needs Java + TLA2TOOLS_JAR)
 
 READER'S NOTE — regular expressions
     re.findall(r'<<"(\\w+)", "(\\w+)">>', text) finds every TLA+ pair such as
@@ -332,5 +333,40 @@ def test_alloy_assertions_hold(tmp_path):
     for line in lines:
         expected = "UNSAT" if line.split()[1] == "check" else "SAT"
         assert line.split()[-1] == expected, line
+
+
+# ===========================================================================
+# SCENE 8 — THE OLD GATE, PLANTED BACK
+# Proves: NoCleanPassOverAuthorityClosure is not vacuous. Restoring the
+#   pre-October-2026 gate (a constraint counts as resolved if merely not
+#   open, so an authority closure passes) makes TLC report it violated.
+#   One signal and a six-record log reach that path quickly.
+# ===========================================================================
+
+@needs_tlc
+def test_tlc_catches_the_old_authority_gate(tmp_path):
+    """
+    Plant the old GateOK in a copy of the model; TLC must object.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+    Exit:    passes if TLC names NoCleanPassOverAuthorityClosure
+    """
+    # PLAYERS IN THIS SCENE
+    #   new_gate, old_gate   the current and the planted GateOK definitions
+    #   mutant, cfg          the planted model and its one-signal configuration
+    #   result               TLC's run
+
+    new_gate = ('GateOK == \\A s \\in Signals :\n'
+                '            \\/ state[s] = "closed_evidence"\n'
+                '            \\/ state[s] = "exited" /\\ exitType[s] \\in ResolvingExits')
+    old_gate = 'GateOK == \\A s \\in Signals : state[s] /= "unregistered" /\\ ~IsOpen(s)'
+    assert new_gate in TLA_TEXT
+    mutant = tmp_path / "src" / TLA_FILE.name
+    mutant.parent.mkdir()
+    mutant.write_text(TLA_TEXT.replace(new_gate, old_gate))
+    cfg = (TLA_FILE.with_suffix(".cfg").read_text()
+           .replace("MaxLog = 8", "MaxLog = 6").replace("Signals = {s1, s2}", "Signals = {s1}"))
+    result = run_tlc(mutant, cfg, tmp_path)
+    assert "NoCleanPassOverAuthorityClosure is violated" in result.stdout, result.stdout[-3000:]
 
 # EXEUNT — end of file.

@@ -7,7 +7,7 @@ These are machine-checked models of the parts of the CCL-F v0.2 runtime where a 
 A Python test (`tests/test_verification.py`) ties both models to the code, so they cannot drift apart unnoticed.
 
 ```bash
-bash verification/run.sh      # downloads pinned, checksummed jars; about 15 minutes
+bash verification/run.sh      # downloads pinned, checksummed jars; about 17 minutes
 ```
 
 It needs Java 17 or later. Without Java, the model-to-code tests still run in the normal `pytest`; only the checker runs are skipped.
@@ -32,9 +32,11 @@ A passing check means no counterexample exists **within the bounds** below. It i
 - re-entry conditions: successor, a different agent, a hold lifted, a resolution condition registered at exit and met;
 - the Rule 8 model update;
 - Rule 4 acceptance;
-- the gate and its logged override.
+- the irreversible gate (a constraint counts as resolved only if evidence-closed or exited terminal/superseded) and its logged override.
 
-**Result.** TLC explores every reachable state: 31,716,691 distinct states, depth 9. It finds no violation.
+The model does not cover Closure Chain or the decision-level External Evidence Source requirement; those are tested in Python (`tests/test_gate_design.py`).
+
+**Result.** TLC explores every reachable state: 31,485,931 distinct states, depth 9. It finds no violation.
 
 | Property | What it says | Source in the draft |
 |---|---|---|
@@ -53,8 +55,11 @@ A passing check means no counterexample exists **within the bounds** below. It i
 | `Rule4` | execution implies acceptance | Rule 4 |
 | `OpenLoopExecutionLogged` | executing with open loops leaves an override on record | Execution Gates |
 | `OverrideLatchesReviews` | after an override, no loop is left under review; each is latched in trajectory_lock | Layer 4, lock-in closure |
+| `NoCleanPassOverAuthorityClosure` | the gate never passes cleanly over a constraint closed by authority or role switch | Reversibility Logic; Execution Gates |
 
-**Not vacuous.** `tests/test_verification.py` plants `classified → closed_authority` in a copy of the table and confirms that TLC reports `NoCloseBeforeReview` violated.
+**Not vacuous.** `tests/test_verification.py` plants two faults in copies of the model and confirms TLC catches each:
+- `classified → closed_authority` added to the table: `NoCloseBeforeReview` is violated;
+- the pre-October-2026 gate restored, which let an authority-closed constraint pass: `NoCleanPassOverAuthorityClosure` is violated.
 
 ## Alloy: `alloy/closure_and_architecture.als`
 

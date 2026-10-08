@@ -238,7 +238,8 @@ def test_challenger_launch_blocked_then_overridden():
     assert events.index("EXECUTION_BLOCKED") < events.index("GATE_OVERRIDE")
     [blocked] = entries(sv, "EXECUTION_BLOCKED")
     failures = " | ".join(blocked.payload["failures"])
-    for needle in ("open constraint loops", "recurrence groups not reviewed", "AP-A"):
+    for needle in ("constraint/anomaly loops not evidence-closed",
+                   "recurrence groups not reviewed", "AP-A"):
         assert needle in failures
     assert blocked.payload["architecture_void"] is True
     [override] = entries(sv, "GATE_OVERRIDE")
@@ -261,12 +262,14 @@ def test_challenger_open_constraints_are_not_latched():
     escalated -> trajectory_lock transition, yet calls trajectory_lock "a
     permanent marker that the loop remained open at the point irreversible
     execution proceeded". The code latches only signals under review, so in
-    the Challenger replay no signal reaches trajectory_lock; the five open
-    constraints appear only in the LOCK_IN_WITH_OPEN_CONSTRAINTS detail.
+    the Challenger replay no signal reaches trajectory_lock. The five
+    escalated constraints, and the two closed by authority (which the
+    irreversible gate does not accept, Reversibility Logic), appear only in
+    the LOCK_IN_WITH_OPEN_CONSTRAINTS detail.
 
     Enter:   (nothing)
     Exit:    passes if nothing is trajectory_lock, the open-loop execution
-             entry has locked == [] and still_open naming the five
+             entry has locked == [] and still_open naming those seven
              constraints, and the lock-in escalation was raised
     """
     # PLAYERS IN THIS SCENE
@@ -276,7 +279,8 @@ def test_challenger_open_constraints_are_not_latched():
     assert not any(s.state == S.TRAJECTORY_LOCK for s in sv.signals.values())
     [olie] = entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION")
     assert olie.payload["locked"] == []
-    assert sorted(olie.payload["still_open"]) == sorted(FRR_LATE + ["cold-oring-no-launch"])
+    assert sorted(olie.payload["still_open"]) == sorted(
+        FRR_LATE + ["cold-oring-no-launch", "constraint-frr-2", "launch-constraint-51F"])
     assert any(r.condition == E.LOCK_IN_WITH_OPEN_CONSTRAINTS for r in sv.reviews)
 
 

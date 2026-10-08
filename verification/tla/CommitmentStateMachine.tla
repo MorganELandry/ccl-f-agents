@@ -210,9 +210,16 @@ LeavesOpen == {"containment", "recoverable", "delegated", "deferred", "forced",
 IsOpen(s) == \/ state[s] \in OpenStates
              \/ state[s] = "exited" /\ exitType[s] \in LeavesOpen
 
-\* The irreversible gate, reduced to the requirement this model can see:
-\* no open loops (all signals are treated as constraints here).
-GateOK == \A s \in Signals : state[s] /= "unregistered" /\ ~IsOpen(s)
+\* The irreversible gate, reduced to the requirement this model can see.
+\* Every signal is treated as a constraint, and a constraint counts as
+\* resolved only if closed by evidence or exited by a type whose Loop State
+\* After is closed (terminal, superseded): authority and role-switch
+\* closures do not satisfy it (Reversibility Logic). Chain soundness and
+\* the decision-level EES requirement are not modeled here.
+ResolvingExits == {"terminal", "superseded"}
+GateOK == \A s \in Signals :
+            \/ state[s] = "closed_evidence"
+            \/ state[s] = "exited" /\ exitType[s] \in ResolvingExits
 
 \* Clean execution: accepted and the gate passes.
 Execute ==
@@ -328,6 +335,13 @@ OpenLoopExecutionLogged ==
 OverrideLatchesReviews ==
   [][(~executed /\ executed' /\ ~GateOK)
        => \A s \in Signals : state'[s] /= "under_review"]_vars
+
+\* A constraint closed by authority or role switch never lets the gate
+\* pass cleanly: clean execution needs every loop evidence-closed or
+\* resolved by exit.
+NoCleanPassOverAuthorityClosure ==
+  [][(~executed /\ executed' /\ log'[Len(log')].kind = "execution_permitted")
+       => \A s \in Signals : state[s] \notin {"closed_authority", "closed_role_switch"}]_vars
 
 (***************************************************************************)
 (* SCENE 5 - THE SPECIFICATION                                             *)

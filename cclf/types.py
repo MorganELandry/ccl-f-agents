@@ -96,7 +96,7 @@ from typing import Optional
 # ===========================================================================
 # DRAMATIS PERSONAE (every module-level variable, declared here at the top)
 # ---------------------------------------------------------------------------
-# This file has three module-level variables, and none of them can be
+# This file has four module-level variables, and none of them can be
 # hoisted up here: each is built from members of an Enum class that is
 # defined further down the file, and Python runs a module top to bottom, so
 # the class must exist before the constant can be made. Each one stays
@@ -104,6 +104,7 @@ from typing import Optional
 #
 #   CLOSED_STATES          (after CommitmentState)  the three closed states
 #   EXIT_LEAVES_LOOP_OPEN  (after ExitType)         exits that leave a loop open
+#   RESOLVING_EXITS        (after ExitType)         exits that resolve a loop
 #   EES_ELIGIBLE_KINDS     (after EvidenceKind)     evidence kinds that can be EES
 # ===========================================================================
 
@@ -246,6 +247,15 @@ EXIT_LEAVES_LOOP_OPEN = frozenset({
     ExitType.FORCED, ExitType.EXHAUSTION, ExitType.BOUNDARY, ExitType.AMBIGUITY,
     ExitType.KEY_PERSON,
 })
+
+# RESOLVING_EXITS — exit types after which a constraint or anomaly loop
+#   counts as resolved at the irreversible gate: the two whose Loop State
+#   After is closed ("Closed by exit — permanently"; "Void — closed by
+#   circumstance"). Every other exit leaves the gate requirement unmet,
+#   including timeout, whistleblower and legal exits (Layer 4, Execution
+#   Gates, "Constraint and anomaly loops evidence-closed").
+#   Cannot move to DRAMATIS PERSONAE: built from ExitType members.
+RESOLVING_EXITS = frozenset({ExitType.TERMINAL, ExitType.SUPERSEDED})
 
 
 # ===========================================================================
@@ -422,6 +432,10 @@ class Evidence:
       kind          an EvidenceKind; decides whether it can be EES at all
       produced_by   the process that generated it (EES independence test)
       at            supervisor clock tick when it was added (Evidence Novelty)
+      depends_on    ids of the signals (coordination loops) this evidence
+                    depends on: its upstream loops (Layer 2, Closure Chain).
+                    A closure resting on it counts as evidence closure only
+                    if every upstream loop is itself evidence-closed.
 
     Frozen: once recorded, evidence cannot be edited.
     """
@@ -431,6 +445,7 @@ class Evidence:
     kind: EvidenceKind
     produced_by: str
     at: int = 0
+    depends_on: tuple[str, ...] = ()
 
 
 # ===========================================================================
@@ -687,6 +702,9 @@ class Decision:
       accepted_by            the Rule 4 accepting agent, or None until then
       acceptance_rationale   their documented rationale ("" until accepted)
       executed               True once the gate has let it execute
+      acceptance_evidence    ids of evidence cited in the Rule 4 acceptance;
+                             it can supply the decision's External Evidence
+                             Source (Layer 4, Execution Gates)
     """
     decision_id: str
     description: str
@@ -695,6 +713,7 @@ class Decision:
     accepted_by: Optional[str] = None
     acceptance_rationale: str = ""
     executed: bool = False
+    acceptance_evidence: tuple[str, ...] = ()
 
 
 # ===========================================================================

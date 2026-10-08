@@ -31,7 +31,7 @@ THE PLAYBILL
     Scene 1   test_routine_needs_only_registration
     Scene 2   test_routine_with_unregistered_signal_is_blocked  (was a spec mismatch; now fixed)
     Scene 3   test_elevated_needs_classification_and_documented_loops
-    Scene 4   test_irreversible_blocks_open_constraint_loops
+    Scene 4   test_irreversible_blocks_unresolved_constraint_loops
     Scene 5   test_irreversible_blocks_unstable_classification
     Scene 6   test_irreversible_blocks_unreviewed_recurrence_group
     Scene 7   test_evidence_closure_ratio                      (impl. decision D4)
@@ -170,12 +170,13 @@ def test_elevated_needs_classification_and_documented_loops(sv):
 
 
 # ===========================================================================
-# SCENE 4 — NO OPEN CONSTRAINT LOOPS
+# SCENE 4 — CONSTRAINT LOOPS EVIDENCE-CLOSED
 # Proves: the first irreversible requirement; an open uncertainty (not a
-# constraint) does not trip it.
+# constraint or anomaly) does not trip it. (tests/test_gate_design.py holds
+# the full set written from the spec text.)
 # ===========================================================================
 
-def test_irreversible_blocks_open_constraint_loops(sv):
+def test_irreversible_blocks_unresolved_constraint_loops(sv):
     """
     An open constraint blocks an irreversible decision; an open uncertainty
     alone does not produce that failure.
@@ -188,7 +189,7 @@ def test_irreversible_blocks_open_constraint_loops(sv):
     decision(sv, "d", ["c", "u"])
     result = sv.request_execution("d", "director")
     assert not result.permitted
-    assert "open constraint loops: ['c']" in result.failures
+    assert "constraint/anomaly loops not evidence-closed: ['c']" in result.failures
 
 
 # ===========================================================================
@@ -284,7 +285,8 @@ def test_coherence_threshold_blocks_irreversible():
     """
     Implementation-decision test (D3: default threshold 0.6). A decision
     whose only failure is coherence is blocked at threshold 0.95 and the
-    same history is permitted at 0.6.
+    same history is permitted at 0.6. Independent lab evidence cited in the
+    acceptance supplies the External Evidence Source the gate requires.
 
     Enter:   (nothing)
     Exit:    passes if the strict supervisor reports only the coherence
@@ -298,7 +300,9 @@ def test_coherence_threshold_blocks_irreversible():
     assert lax.settings.coherence_threshold == 0.6
     for sv in (strict, lax):
         to_review(sv, "u", signal_type=SignalType.UNCERTAINTY)   # open, not a constraint
-        decision(sv, "d", ["u"])
+        decision(sv, "d", ["u"], accept=False)
+        add_ees(sv, "lab")
+        sv.accept_decision("d", "director", "I accept", evidence_ids=["lab"])
     failures = strict.request_execution("d", "director").failures
     assert len(failures) == 1 and failures[0].startswith("coherence")
     assert lax.request_execution("d", "director").permitted

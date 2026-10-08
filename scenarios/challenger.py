@@ -23,9 +23,10 @@ tests/test_closure.py when no escalation is pending), records the framing signal
 suppression of the open uncertainty, and blocks the irreversible launch
 decision. The launch then proceeds only through a logged override. The
 override records open-loop irreversible execution and escalates lock-in with
-open constraint loops; because every open constraint is by then already
-escalated (not merely under review), none is latched into trajectory lock:
-v0.2 defines that transition only from under_review.
+open constraint loops. None is latched into trajectory lock (v0.2 defines
+that transition only from under_review): the open constraints are by then
+escalated, and the rest were closed by authority, which the irreversible
+gate does not accept as resolution, so all of them are listed still open.
 
 THE PLAYBILL
     Scene 1  the architecture record             (Layer 0)

@@ -54,6 +54,8 @@ THE PLAYBILL (what happens in this file)
     ACT II — EVIDENCE AND ARCHITECTURE
         Scene 1   is_novel                 Evidence Novelty (Layer 2)
         Scene 2   is_ees                   External Evidence Source (Layer 2)
+        Scene 2b  _qualifying, _closure_sound, _signal_sound, chain_sound
+                                           Closure Chain: sound all the way up?
         Scene 3   register_architecture    record the Layer 0 facts
         Scene 4   add_evidence             record one item of evidence
     ACT III — THE SIGNAL LIFECYCLE: ENTRANCE, CLASSIFICATION, REVIEW
@@ -89,6 +91,8 @@ THE PLAYBILL (what happens in this file)
         Scene 5   _classification_stable   D8: has the classification settled?
         Scene 6   coherence                the Layer 4 coherence score (D3)
         Scene 7   architecture_check       the Layer 0 voids a runtime can see (D9)
+        Scene 7b  _gate_resolved, _decision_ees   the irreversible gate's
+                                           loop and evidence tests
         Scene 8   request_execution        the execution gates and overrides
     ACT IX — READ-ONLY VIEWS
         Scene 1   open_reviews             unresolved structural reviews
@@ -146,7 +150,7 @@ from .types import (
     Architecture, ClosureRecord, ClosureType, CommitmentState as S, Decision,
     EES_ELIGIBLE_KINDS, EscalationCondition as E, Evidence, ExecutionClass,
     ExitRecord, ExitType, LegalSubtype, OperationalState as O, Referent,
-    Signal, SignalType, CLOSED_STATES,
+    Signal, SignalType, CLOSED_STATES, RESOLVING_EXITS,
 )
 
 
@@ -667,6 +671,93 @@ class Supervisor:
         return (ev.kind in EES_ELIGIBLE_KINDS
                 and ev.produced_by not in (sig.evaluated_process, sig.registered_by))
 
+    # =======================================================================
+    # ACT II, SCENE 2b — IS IT SOUND ALL THE WAY UP?
+    # Closure Chain: an evidence closure is only as good as the loops its
+    # evidence depends on.
+    # =======================================================================
+
+    def _qualifying(self, rec: ClosureRecord, sig: Signal) -> list[Evidence]:
+        """
+        The cited evidence that made a closure an evidence closure.
+
+        Enter:   rec   a closure record on `sig`
+                 sig   the signal it closed
+        Exit:    the cited Evidence items that are both novel and EES
+
+        Recomputed from the record rather than stored: evidence is frozen
+        and a signal's registration time never changes, so the answer is
+        the same as at closure time.
+        """
+        return [self.evidence[e] for e in rec.evidence_ids
+                if e in self.evidence and self.is_novel(self.evidence[e], sig)
+                and self.is_ees(self.evidence[e], sig)]
+
+    def _closure_sound(self, rec: ClosureRecord, sig: Signal, seen: frozenset) -> bool:
+        """
+        Is this closure a chain-sound evidence closure?
+
+        Enter:   rec    a closure record on `sig`
+                 sig    the signal it closed
+                 seen   signal ids already on the path being checked (to
+                        catch cycles)
+        Exit:    True only for a real (not attempted) evidence closure with
+                 at least one qualifying item whose every upstream loop is
+                 itself chain-sound
+
+        Spec: Layer 2, Closure Chain: "An evidence closure is chain-sound
+        only if at least one item of qualifying evidence it cites has every
+        upstream loop itself chain-sound: closed by evidence closure, all
+        the way up. A loop cannot be its own upstream, directly or through
+        others."
+
+        `all(...)` over an empty list is True, so evidence with no
+        upstream loops is sound on its own.
+        """
+        # PLAYERS IN THIS SCENE
+        #   path   `seen` plus this signal: what the upstream checks must avoid
+
+        if rec.attempted_only or rec.closure_type != ClosureType.EVIDENCE:
+            return False
+        path = seen | {sig.signal_id}
+        return any(all(self._signal_sound(up, path) for up in ev.depends_on)
+                   for ev in self._qualifying(rec, sig))
+
+    def _signal_sound(self, signal_id: str, seen: frozenset) -> bool:
+        """
+        Is this signal currently closed by a chain-sound evidence closure?
+
+        Enter:   signal_id   the signal to check
+                 seen        signal ids already on the path (cycle guard)
+        Exit:    False if the signal is on the path already (a cycle), is
+                 unknown, or is not in closed_evidence; otherwise whether its
+                 latest real closure is chain-sound
+        """
+        # PLAYERS IN THIS SCENE
+        #   sig      the signal
+        #   latest   its most recent real (not attempted) closure record
+
+        if signal_id in seen or signal_id not in self.signals:
+            return False
+        sig = self.signals[signal_id]
+        if sig.state != S.CLOSED_EVIDENCE:
+            return False
+        latest = next(c for c in reversed(sig.closures) if not c.attempted_only)
+        return self._closure_sound(latest, sig, seen)
+
+    def chain_sound(self, signal_id: str) -> bool:
+        """
+        Public check: is this signal closed by a chain-sound evidence closure?
+
+        Enter:   signal_id   a registered signal
+        Exit:    True or False; raises TransitionRefused for an unknown id
+
+        Assessed now, not at closure time ("Chain soundness is assessed at
+        the time it is needed, not fixed at closure").
+        """
+        self._signal(signal_id)
+        return self._signal_sound(signal_id, frozenset())
+
     # ------------------------------------------------------------------
     # Architecture and evidence
     # ------------------------------------------------------------------
@@ -710,7 +801,8 @@ class Supervisor:
     # =======================================================================
 
     def add_evidence(self, evidence_id: str, content: str, source: str, kind,
-                     produced_by: str, by: str, signal_ids: Iterable[str] = ()) -> Evidence:
+                     produced_by: str, by: str, signal_ids: Iterable[str] = (),
+                     depends_on: Iterable[str] = ()) -> Evidence:
         """
         Register one item of evidence, stamped with the current clock.
 
@@ -721,19 +813,17 @@ class Supervisor:
                  produced_by   the process that produced it (used by the EES test)
                  by            the registering agent
                  signal_ids    signals to attach it to (default: none)
+                 depends_on    signals this evidence depends on: its
+                               upstream loops (Layer 2, Closure Chain)
         Exit:    the new Evidence; raises TransitionRefused if the id is
-                 already used or a signal id is unknown
+                 already used or any signal id (in either list) is unknown,
+                 and then stores nothing
 
         The clock stamp is what is_novel() later compares with a signal's
-        registration time.
-
-        Note on refusals: the duplicate-id check happens after the clock
-        ticks. An unknown signal id is only found inside the loop, after the
-        evidence is stored and attached to any earlier signals in the list,
-        so that refusal leaves those changes in place (and no EVIDENCE_ADDED
-        entry is written). Also, signal_ids is looped over twice (attach,
-        then log); a one-shot iterator such as a generator would be empty
-        the second time, so pass a list or tuple.
+        registration time. "Dependencies are registered by the agent who
+        adds the evidence; the chain can only be as complete as that
+        registration." A dependency cycle is accepted here and simply never
+        counts (see _closure_sound).
         """
         # PLAYERS IN THIS SCENE
         #   at    the clock value stamped on the evidence
@@ -746,19 +836,21 @@ class Supervisor:
         # twice; looking every signal up first means an unknown id refuses
         # the whole operation instead of leaving the evidence half-attached.
         signal_ids = list(signal_ids)
+        depends_on = tuple(depends_on)
         if evidence_id in self.evidence:
             raise TransitionRefused(f"evidence {evidence_id!r} already registered")
-        for sid in signal_ids:
+        for sid in signal_ids + list(depends_on):
             self._signal(sid)
         at = self._tick()
         # --- Create and store the record -----------------------------------
-        ev = Evidence(evidence_id, content, source, kind, produced_by, at)
+        ev = Evidence(evidence_id, content, source, kind, produced_by, at, depends_on)
         self.evidence[evidence_id] = ev
         # --- Attach to each named signal -----------------------------------
         for sid in signal_ids:
             self._signal(sid).evidence_ids.append(evidence_id)
         self._log("EVIDENCE_ADDED", by, evidence=evidence_id, kind=kind,
-                  produced_by=produced_by, source=source, signals=list(signal_ids))
+                  produced_by=produced_by, source=source, signals=list(signal_ids),
+                  depends_on=list(depends_on))
         return ev
 
     # ###########################################################################
@@ -1323,8 +1415,10 @@ class Supervisor:
         signal's registrant nor the agent who made the superseded closure.
         """
         # PLAYERS IN THIS SCENE
-        #   sig          the signal
-        #   superseded   the latest real (not attempted) closure record
+        #   sig            the signal
+        #   superseded     the latest real (not attempted) closure record
+        #   sound_before   other signals that were chain-sound before the reopen
+        #   sid            each of them, rechecked after it
 
         self._require_actor(by)
         if not rationale:
@@ -1344,12 +1438,22 @@ class Supervisor:
         if sig.state == S.CLOSED_ROLE_SWITCH and by in (sig.registered_by, superseded.closed_by):
             raise TransitionRefused("reopening a role-switch closure requires an "
                                     "independent reviewer")
+        # --- Which downstream closures stand on this one? ------------------
+        # Recorded before the reopen so the loss can be logged after it.
+        sound_before = {sid for sid in self.signals
+                        if sid != signal_id and self._signal_sound(sid, frozenset())}
         # --- Reopen, logging the superseded record -------------------------
         self._move(sig, S.UNDER_REVIEW, by, rationale=rationale,
                    supersedes=superseded.record_id,
                    independent_review_required=sig.state == S.CLOSED_ROLE_SWITCH)
         sig.reopen_count += 1
         sig.review_opened_at = self.clock
+        # --- Closure Chain: log every downstream closure that lost standing
+        # ("every closure downstream of it loses its standing, and the
+        # weakened link is logged"). sorted() keeps the log order stable.
+        for sid in sorted(sound_before):
+            if not self._signal_sound(sid, frozenset()):
+                self._log("CHAIN_WEAKENED", by, signal=sid, upstream=signal_id)
         self._apply_pending_escalations(sig, by)
 
     # =======================================================================
@@ -2036,14 +2140,20 @@ class Supervisor:
     # Rule 4: a single named agent accepts the decision.
     # =======================================================================
 
-    def accept_decision(self, decision_id: str, by: str, rationale: str) -> None:
+    def accept_decision(self, decision_id: str, by: str, rationale: str,
+                        evidence_ids: Iterable[str] = ()) -> None:
         """
         Rule 4: a single named agent accepts authorization, risk and rationale.
 
         Enter:   decision_id   the decision
                  by            the accepting agent
                  rationale     required; the rationale they take on
-        Exit:    None; the decision records `by` and the rationale
+                 evidence_ids  evidence cited in the acceptance (already
+                               added); it can supply the decision's External
+                               Evidence Source at the irreversible gate
+        Exit:    None; the decision records `by`, the rationale and the
+                 cited evidence; an unknown evidence id is refused and
+                 nothing changes
 
         Spec: Rule 4 (~lines 330-338): "Before any execution-class decision,
         a single agent must explicitly accept authorization, risk
@@ -2055,16 +2165,24 @@ class Supervisor:
         the earlier one (both are in the audit trail).
         """
         # PLAYERS IN THIS SCENE
-        #   d   the decision
+        #   d              the decision
+        #   evidence_ids   the cited ids, frozen into a tuple
+        #   unknown        any of them not in the evidence record
 
         self._require_actor(by)
         if not rationale:
             raise TransitionRefused("Rule 4: acceptance requires rationale documentation")
         d = self._decision(decision_id)
+        evidence_ids = tuple(evidence_ids)
+        unknown = [e for e in evidence_ids if e not in self.evidence]
+        if unknown:
+            raise TransitionRefused(f"unknown evidence cited in acceptance: {unknown}")
         self._tick()
-        # `a, b = x, y` assigns both fields in one line.
-        d.accepted_by, d.acceptance_rationale = by, rationale
-        self._log("DECISION_ACCEPTED", by, decision=decision_id, rationale=rationale)
+        # `a, b, c = x, y, z` assigns all three fields in one line.
+        d.accepted_by, d.acceptance_rationale, d.acceptance_evidence = (
+            by, rationale, evidence_ids)
+        self._log("DECISION_ACCEPTED", by, decision=decision_id, rationale=rationale,
+                  evidence=list(evidence_ids))
 
     # =======================================================================
     # ACT VIII, SCENE 4 — THE DECISION'S CAST LIST
@@ -2174,8 +2292,9 @@ class Supervisor:
         # PLAYERS IN THIS SCENE
         #   sigs                the decision's registered signals
         #   open_or_locked      those open or in trajectory_lock
-        #   closures            every real (not attempted) closure on them
-        #   evidence_closures   the evidence closures among those
+        #   pairs               (signal, closure) for every real closure on them
+        #   closures            just the closures
+        #   evidence_closures   the chain-sound evidence closures among those
         #   groups              the recurrence groups they belong to
         #   pressure            the highest recurrence pressure found (0..1)
         #   g, n                a group, and its member count
@@ -2192,9 +2311,13 @@ class Supervisor:
             return 1.0, {k: 1.0 for k in COHERENCE_WEIGHTS}
         # --- Gather what the factors are computed from ---------------------
         open_or_locked = [s for s in sigs if s.is_open or s.state == S.TRAJECTORY_LOCK]
-        # Two `for` clauses: for each signal, for each of its closures.
-        closures = [c for s in sigs for c in s.closures if not c.attempted_only]
-        evidence_closures = [c for c in closures if c.closure_type == ClosureType.EVIDENCE]
+        # Two `for` clauses: for each signal, for each of its closures. The
+        # (signal, closure) pairs let each closure be judged against its own
+        # signal; only chain-sound evidence closures count as evidence
+        # (Layer 2, Closure Chain).
+        pairs = [(s, c) for s in sigs for c in s.closures if not c.attempted_only]
+        closures = [c for _, c in pairs]
+        evidence_closures = [c for s, c in pairs if self._closure_sound(c, s, frozenset())]
         # {... for ...} with no colon is a set comprehension: duplicates
         # collapse, so each group appears once. `if s.recurrence_group`
         # skips signals with no group.
@@ -2208,7 +2331,7 @@ class Supervisor:
             pressure = max(pressure, min(1.0, n / self.settings.recurrence_threshold))
         reopens = sum(s.reopen_count for s in sigs)
         # --- Authority compression: one closer dominating non-evidence ----
-        non_evidence = [c for c in closures if c.closure_type != ClosureType.EVIDENCE]
+        non_evidence = [c for s, c in pairs if not self._closure_sound(c, s, frozenset())]
         if len(closures) >= 2 and non_evidence:
             # For each distinct closer (a set comprehension), count their
             # non-evidence closures; keep the largest count.
@@ -2325,21 +2448,83 @@ class Supervisor:
     # May this decision execute? Check the gates, and handle overrides.
     # =======================================================================
 
+    # =======================================================================
+    # ACT VIII, SCENE 7b — WHAT THE IRREVERSIBLE GATE ASKS OF LOOPS AND EVIDENCE
+    # =======================================================================
+
+    def _gate_resolved(self, sig: Signal) -> bool:
+        """
+        Does a constraint or anomaly loop meet the irreversible gate?
+
+        Enter:   sig   a constraint or anomaly signal
+        Exit:    True if it is closed by a chain-sound evidence closure, or
+                 exited by a type whose Loop State After is closed
+
+        Spec: Layer 4, Execution Gates, "Constraint and anomaly loops
+        evidence-closed": "closed by a chain-sound evidence closure, or has
+        exited by a type whose Loop State After is closed (terminal,
+        superseded)." Reversibility Logic: "A constraint or anomaly loop
+        closed by authority or role switch is not resolved for this
+        purpose, however final its closure looks."
+        """
+        if sig.state == S.EXITED and sig.exit is not None:
+            return sig.exit.exit_type in RESOLVING_EXITS
+        return self._signal_sound(sig.signal_id, frozenset())
+
+    def _decision_ees(self, d: Decision, sigs: list[Signal]) -> bool:
+        """
+        Is there at least one External Evidence Source in the decision's
+        support?
+
+        Enter:   d      the decision
+                 sigs   its registered signals
+        Exit:    True if some evidence of an eligible kind, produced by
+                 neither a process under evaluation in the decision's loops
+                 nor the accepting agent, is among (a) the qualifying
+                 evidence of its loops' chain-sound evidence closures, or
+                 (b) the evidence cited in its Rule 4 acceptance
+
+        Spec: Layer 4, Execution Gates, "At least one External Evidence
+        Source": "A decision reasoned through entirely inside one process,
+        however many loops it closed or reviews it passed, does not meet
+        this requirement."
+
+        IMPLEMENTATION DECISION: the spec states no novelty or chain test
+        for evidence cited in the acceptance, so none is applied to it.
+        """
+        # PLAYERS IN THIS SCENE
+        #   excluded   producers that cannot count: the processes under
+        #              evaluation and the accepting agent
+        #   support    candidate Evidence items, from (a) and (b)
+        #   latest     each evidence-closed loop's latest real closure
+
+        excluded = {s.evaluated_process for s in sigs} | {d.accepted_by}
+        support = [self.evidence[e] for e in d.acceptance_evidence]
+        for s in sigs:
+            if self._signal_sound(s.signal_id, frozenset()):
+                latest = next(c for c in reversed(s.closures) if not c.attempted_only)
+                support += self._qualifying(latest, s)
+        return any(ev.kind in EES_ELIGIBLE_KINDS and ev.produced_by not in excluded
+                   for ev in support)
+
     def request_execution(self, decision_id: str, by: str,
                           override_rationale: Optional[str] = None) -> GateResult:
         """
         Execution gate (Layer 4). Requirements by class:
-          irreversible  no open constraint loops; classification stabilized;
-                        recurrence groups reviewed; minimum evidence closure
-                        ratio met; coherence at or above threshold
+          irreversible  constraint and anomaly loops evidence-closed (weakest
+                        link, chain-sound); minimum evidence closure ratio for
+                        the other loop types; at least one External Evidence
+                        Source; classification stabilized; recurrence groups
+                        reviewed; coherence at or above threshold
           elevated      classification acknowledged; open loops documented
           routine       signal registration complete
         Rule 4 acceptance is required for every class and cannot be
         overridden. A Layer 0 void makes the gate structurally void.
         Other failures may be overridden: the override is permanently logged
-        with identity, rationale and time; for irreversible execution, open
-        constraint loops are latched into trajectory_lock with a lock-in
-        closure record ("open-loop irreversible execution").
+        with identity, rationale and time; for irreversible execution,
+        constraint and anomaly loops under review are latched into
+        trajectory_lock with a lock-in closure record ("open-loop
+        irreversible execution").
 
         Enter:   decision_id          the decision asking to execute
                  by                   the requesting agent
@@ -2359,9 +2544,12 @@ class Supervisor:
           Coherence (~line 960): "A score below the domain-configured
             threshold blocks irreversible execution pending
             acknowledgment." Here the acknowledgment is an override.
-          Reversibility Logic (~line 506): "Irreversible decisions require
-            evidence-based closure for all open constraint loops, or an
-            explicit open-loop authorization with permanent audit logging."
+          Reversibility Logic: "Irreversible decisions require
+            evidence-based closure for all constraint and anomaly loops, or
+            an explicit open-loop authorization with permanent audit
+            logging." Closure Chain: a closure that is not chain-sound
+            "counts as a non-evidence closure ... at the execution gates, in
+            the evidence closure ratio, and in the coherence score."
           Open-Loop Irreversible Execution (Key Definitions, ~line 1236):
             "Permitted with explicit authorization — permanently logged."
           Lock-in closure (~lines 946, 1216): recorded as under_review ->
@@ -2380,9 +2568,10 @@ class Supervisor:
           - "Recurrence groups reviewed" fails only for a group with an
             unresolved Rule 7 review; a group that never reached the
             threshold has no review and passes.
-          - The evidence closure ratio (D4) counts real closures, including
+          - The evidence closure ratio (D4) counts the real closures of the
+            decision's non-constraint, non-anomaly signals, including
             lock-in closures from earlier overrides; it is skipped when
-            there are no closures.
+            there are none ("there is nothing to measure").
           - Unresolved structural reviews on the decision's signals, or on
             the decision itself, block irreversible execution.
           - Open off-envelope or containment signals block irreversible
@@ -2393,10 +2582,12 @@ class Supervisor:
           - Overrides are allowed for every gate failure except Rule 4,
             including Layer 0 voids (the result still reports
             architecture_void=True and the override log records it).
-          - Lock-in latching applies only to constraint signals that are
-            under_review: that is the only state the state machine lets move
-            to trajectory_lock. Constraint loops open in any other state are
-            reported as "still open" in the escalation and the log.
+          - Lock-in latching applies only to constraint and anomaly signals
+            that are under_review: that is the only state the state machine
+            lets move to trajectory_lock. Constraint and anomaly loops that
+            fail the gate in any other way (open elsewhere, or closed
+            without chain-sound evidence) are reported as "still open" in
+            the escalation and the log.
           - A suppressed signal at an irreversible request opens the
             SUPPRESSED_BEFORE_EXECUTION review first, before the other
             irreversible checks run, so that review's "unresolved
@@ -2412,18 +2603,20 @@ class Supervisor:
         #   unclassified       signals with no operational state
         #   undocumented       signals still only `registered`
         #   suppressed         signals currently suppressed
-        #   open_constraints   constraint signals that are still open
+        #   unresolved         constraint/anomaly signals failing the gate
         #   unstable           signals whose classification is not stable (D8)
         #   groups             the signals' recurrence groups
         #   unreviewed         groups with an unresolved recurrence review
-        #   closures           real closures on the signals
-        #   ratio              share of those that are evidence closures
+        #   pairs              (signal, closure) for the other loop types
+        #   ratio              share of those that are chain-sound evidence
         #   pending            ids of unresolved reviews touching this decision
         #   off                open signals classified off-envelope/containment
         #   result             the GateResult being returned
-        #   locked             constraint signals latched into trajectory_lock
+        #   locked             constraint/anomaly signals latched into
+        #                      trajectory_lock
         #   s, rec             each signal, and its lock-in closure record
-        #   still_open         constraint signals still open after latching
+        #   still_open         constraint/anomaly signals still failing the
+        #                      gate after latching
 
         self._require_actor(by)
         d = self._decision(decision_id)
@@ -2472,11 +2665,12 @@ class Supervisor:
                 self._escalate(E.SUPPRESSED_BEFORE_EXECUTION, f"decision:{decision_id}",
                                f"suppressed signals at execution request: {suppressed}",
                                [], by)
-            # No open constraint loops (Signal.is_open counts exits that
-            # leave the loop open, e.g. deferred or forced).
-            open_constraints = [s.signal_id for s in sigs if s.is_constraint and s.is_open]
-            if open_constraints:
-                failures.append(f"open constraint loops: {open_constraints}")
+            # Constraint and anomaly loops evidence-closed: weakest link,
+            # so one failing loop fails the gate (Reversibility Logic).
+            unresolved = [s.signal_id for s in sigs
+                          if s.high_consequence and not self._gate_resolved(s)]
+            if unresolved:
+                failures.append(f"constraint/anomaly loops not evidence-closed: {unresolved}")
             # Classification stabilized (Rule 3; D8).
             unstable = [s.signal_id for s in sigs if not self._classification_stable(s)]
             if unstable:
@@ -2488,15 +2682,20 @@ class Supervisor:
                                        for r in self.reviews))
             if unreviewed:
                 failures.append(f"recurrence groups not reviewed: {unreviewed}")
-            # Minimum evidence closure ratio (D4). sum() over booleans
-            # counts the evidence closures.
-            closures = [c for s in sigs for c in s.closures if not c.attempted_only]
-            if closures:
-                ratio = (sum(c.closure_type == ClosureType.EVIDENCE for c in closures)
-                         / len(closures))
+            # Minimum evidence closure ratio (D4), for the other loop types
+            # only. sum() over booleans counts the chain-sound evidence
+            # closures.
+            pairs = [(s, c) for s in sigs if not s.high_consequence
+                     for c in s.closures if not c.attempted_only]
+            if pairs:
+                ratio = (sum(self._closure_sound(c, s, frozenset()) for s, c in pairs)
+                         / len(pairs))
                 if ratio < self.settings.min_evidence_closure_ratio:
                     failures.append(f"evidence closure ratio {ratio:.2f} below "
                                     f"{self.settings.min_evidence_closure_ratio:.2f}")
+            # At least one External Evidence Source in the decision's support.
+            if not self._decision_ees(d, sigs):
+                failures.append("no External Evidence Source in the decision's support")
             # Unresolved structural reviews (implementation decision).
             # `set(a) & set(b)` is set intersection: the signal ids both
             # lists share; an empty set is falsy. The outer {...} is a set
@@ -2542,11 +2741,12 @@ class Supervisor:
         locked = []
         # --- Irreversible override: open-loop irreversible execution -------
         if d.execution_class == ExecutionClass.IRREVERSIBLE:
-            # Latch each constraint signal under review into trajectory_lock,
+            # Latch each constraint/anomaly signal under review into
+            # trajectory_lock,
             # with a lock-in closure record (the spec's fourth closure type,
             # which has no closed state of its own, ~line 946).
             for s in sigs:
-                if s.is_constraint and s.state == S.UNDER_REVIEW:
+                if s.high_consequence and s.state == S.UNDER_REVIEW:
                     self._closure_seq += 1
                     rec = ClosureRecord(f"C{self._closure_seq}", s.signal_id,
                                         ClosureType.LOCK_IN, by, None, (),
@@ -2555,9 +2755,11 @@ class Supervisor:
                                record=rec.record_id, decision=decision_id)
                     s.closures.append(rec)
                     locked.append(s.signal_id)
-            # Constraint loops still open in other states (escalated,
-            # suppressed, open exits, ...).
-            still_open = [s.signal_id for s in sigs if s.is_constraint and s.is_open]
+            # Constraint/anomaly loops still failing the gate: open in other
+            # states (escalated, suppressed, open exits, ...) or closed
+            # without chain-sound evidence. Latched ones are excluded.
+            still_open = [s.signal_id for s in sigs if s.high_consequence
+                          and s.state != S.TRAJECTORY_LOCK and not self._gate_resolved(s)]
             # Escalation: lock-in closure in the presence of open constraint
             # loops (the latched ones were open until this moment).
             if locked or still_open:

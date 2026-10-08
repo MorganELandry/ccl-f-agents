@@ -18,16 +18,19 @@ Organizations make catastrophic decisions while holding the information needed t
   - **authority** closures: closed by decision, without qualifying evidence;
   - **role-switch** closures: the same person closing their own signal from the other side of the technical/customer line;
   - **lock-in** closures: recorded when an override latches open constraints that are still under review.
+
+  Evidence can be registered as depending on other loops (Closure Chain). An evidence closure counts only if every loop its evidence depends on is itself evidence-closed, all the way up, and reopening an upstream loop logs every closure that loses its standing.
 - **Escalates on the draft's nine conditions.** These include recurrence, repeated authority closures, suppression before execution, framing over open constraints and credibility discounting. Each escalation opens a structural review, and only a documented Rule 8 model update resolves it.
 - **Gates execution by class** (routine, elevated, irreversible). Every class fails on a detectable Layer 0 void, such as an unstewarded failure mode or a captured reporting channel. Irreversible execution also needs:
-  - no open constraint loops;
+  - every constraint and anomaly loop closed by evidence (weakest link: a loop closed by authority doesn't count);
+  - a minimum evidence-closure ratio for the other loop types;
+  - at least one independent source (External Evidence Source) somewhere in the decision's support;
   - stable classification;
   - reviewed recurrence;
-  - an evidence-closure ratio;
   - no unresolved reviews;
   - open off-envelope or containment signals resolved;
   - a coherence score at or above threshold.
-- **Requires Rule 4 acceptance.** Someone must accept authorization, risk and rationale, and this cannot be overridden. Other failures can be overridden, but every override is logged with identity, rationale and time, and an irreversible override latches constraints still under review into `trajectory_lock`.
+- **Requires Rule 4 acceptance.** Someone must accept authorization, risk and rationale, and this cannot be overridden. Other failures can be overridden, but every override is logged with identity, rationale and time, and an irreversible override latches constraint and anomaly loops still under review into `trajectory_lock`.
 - **Scores coherence** with the draft's five factors and provisional weights.
 - **Writes a hash-chained audit trail.** Editing, removing or reordering an entry breaks verification. Entries cut off the end are caught when checked against a head hash kept elsewhere.
 - **Keeps the model in an advisory role.** An optional model may *propose* a classification for a free-text report. The supervisor applies the same rules to its proposal as to anyone's, and model output never counts as evidence.
@@ -38,13 +41,13 @@ Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 The state machine and the closure and Layer 0 rules are also written as formal models and machine-checked ([verification/](verification/README.md)):
 
-- **TLA+:** TLC explores all 31.7 million reachable states of a bounded model of the Layer 4 state machine. It confirms the draft's four blocked transitions, the recovery and re-entry rules, the append-only audit log, Rule 4, and the logged override.
+- **TLA+:** TLC explores all 31.5 million reachable states of a bounded model of the Layer 4 state machine. It confirms the draft's four blocked transitions, the recovery and re-entry rules, the append-only audit log, Rule 4, and the logged override.
 - **Alloy:** the Alloy Analyzer checks closure typing and the Layer 0 voids. It found one gap in the runtime, a successor who is also the steward passing AP.1b, which is now fixed.
 
 A test ties both models to the Python code so they cannot drift apart.
 
 ```bash
-bash verification/run.sh                 # needs Java 17+; about 15 minutes
+bash verification/run.sh                 # needs Java 17+; about 17 minutes
 ```
 
 ## Scenarios
@@ -62,7 +65,7 @@ pip install -r requirements.txt
 python run_demo.py challenger            # also: therac25, mcas
 python run_demo.py mcas --quiet          # summary only
 python run_demo.py therac25 --audit therac25_audit.json --no-obs
-pytest                                   # 219 tests, no API key needed (3 of them need Java)
+pytest                                   # 271 tests, no API key needed (4 of them need Java)
 ```
 
 The scenarios make no model calls, so the demo needs no API key.

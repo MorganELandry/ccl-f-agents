@@ -67,7 +67,9 @@ Blocked, each with a named reason:
 | **Evidence** | Some attached evidence passes **Evidence Novelty** (it was not present at registration) and the **External Evidence Source** test (its kind is a primary document, direct measurement, formal verification or independent party, and its producer is neither the process under evaluation nor the signal's registrant). Model output, assertions and internal analysis never qualify. |
 | **Role switch** | The registrant closes their own signal while acting for the other referent (technical reality vs. customer, Rule 5.3) with nothing new. Reopening it needs an independent reviewer. |
 | **Authority** | Anything else that closes the signal: a decision without qualifying evidence. |
-| **Lock-in** | Recorded when an override of a failing irreversible gate latches open constraint signals into `trajectory_lock`. |
+| **Lock-in** | Recorded when an override of a failing irreversible gate latches constraint and anomaly signals under review into `trajectory_lock`. |
+
+**Closure Chain.** Evidence can name the loops it depends on (`add_evidence(..., depends_on=[...])`). An evidence closure is *chain-sound* only if at least one item of its qualifying evidence has every upstream loop itself closed by a chain-sound evidence closure. Soundness is computed when needed, so reopening an upstream loop weakens every closure downstream of it, and each one that loses its standing is logged as `CHAIN_WEAKENED`. A closure that isn't chain-sound stays recorded as an evidence closure but counts as non-evidence at the gates, in the ratio and in the coherence score.
 
 If a signal has a registered closure authority and the closer is outside it, the closure is logged as an `ATTEMPTED_CLOSURE`, and the signal stays open. Adopting a frame (`adopt_frame`) by someone within the framing signal's closure authority is an authority closure, and the signals it displaces are suppressed. From anyone else it is only an attempted closure.
 
@@ -128,7 +130,7 @@ Requirements are cumulative across the three execution classes.
 |---|---|
 | Routine | Every signal the decision depends on is registered; no Layer 0 void |
 | Elevated | Plus: classification acknowledged; no open loop left merely registered |
-| Irreversible | Plus all of the following: <ul><li>no open constraint loops (counting exits that leave them open)</li><li>classification stabilized (D8)</li><li>recurrence groups reviewed</li><li>evidence closure ratio (D4)</li><li>no unresolved structural reviews</li><li>open off-envelope or containment signals resolved</li><li>coherence at or above the threshold (D3)</li></ul> |
+| Irreversible | Plus all of the following: <ul><li>every constraint and anomaly loop closed by a chain-sound evidence closure, or exited terminal or superseded (weakest link)</li><li>evidence closure ratio (D4) over the other loop types</li><li>at least one External Evidence Source among the decision's evidence closures or the evidence cited in its Rule 4 acceptance</li><li>classification stabilized (D8)</li><li>recurrence groups reviewed</li><li>no unresolved structural reviews</li><li>open off-envelope or containment signals resolved</li><li>coherence at or above the threshold (D3)</li></ul> |
 
 **Rule 4 acceptance** is required for every class and cannot be overridden: an agent must explicitly accept authorization, risk and rationale.
 
@@ -136,7 +138,7 @@ Other gate failures can be overridden. An override:
 
 - is logged with identity, rationale and time (`GATE_OVERRIDE`);
 - reports any architecture void;
-- on an irreversible decision, latches under-review constraints into `trajectory_lock` with a lock-in closure record and logs `OPEN_LOOP_IRREVERSIBLE_EXECUTION`.
+- on an irreversible decision, latches constraint and anomaly loops under review into `trajectory_lock` with a lock-in closure record, and logs `OPEN_LOOP_IRREVERSIBLE_EXECUTION` with those and every other constraint or anomaly loop that still fails the gate.
 
 An executed irreversible decision cannot be executed again.
 
