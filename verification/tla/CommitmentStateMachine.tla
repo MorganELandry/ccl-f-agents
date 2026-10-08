@@ -329,6 +329,15 @@ GateFor(c) == CASE c = "irreversible" -> GateOK
 \* included.
 RelabelOpen == relabel = "open"
 
+\* A structural review holds an irreversible decision: no override past it
+\* (Layer 4, Overrides). An escalated signal is held by an unresolved
+\* review (only a documented Rule 8 model update releases it), and a
+\* suppressed one opens a review at the very request (Escalation
+\* Conditions: "Suppressed signal detected before irreversible execution"),
+\* so either one holds the decision.
+HeldStates == {"escalated", "suppressed"}
+ReviewHold == AppliedNow = "irreversible" /\ \E s \in Signals : state[s] \in HeldStates
+
 \* Clean execution: accepted, no relabel review open, and the gate for the
 \* APPLIED class passes.
 Execute ==
@@ -337,12 +346,15 @@ Execute ==
   /\ Log(Rec("execution_permitted", "none", "none", "none"))
   /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, accepted>> /\ UNCHANGED classVars
 
-\* Override: accepted, no relabel review open, the applied gate fails, and
-\* the override is logged. At the irreversible class every signal under
-\* review is latched into trajectory_lock (lock-in closure) and the
-\* open-loop marker is logged too; a lower class latches nothing.
+\* Override: accepted, no relabel review open, no structural review holding
+\* an irreversible decision, the applied gate fails, and the override is
+\* logged. At the irreversible class every signal under review is latched
+\* into trajectory_lock (lock-in closure) and the open-loop marker is
+\* logged too; a lower class latches nothing. (That the
+\* overrider is not the accepting agent is checked by the Python tests; this
+\* model has no identities.)
 Override ==
-  /\ accepted /\ ~executed /\ ~RelabelOpen /\ ~GateFor(AppliedNow)
+  /\ accepted /\ ~executed /\ ~RelabelOpen /\ ~ReviewHold /\ ~GateFor(AppliedNow)
   /\ Len(log) + 2 <= MaxLog
   /\ executed' = TRUE
   /\ IF AppliedNow = "irreversible"
@@ -509,11 +521,21 @@ OpenLoopExecutionLogged ==
   [][(~executed /\ executed' /\ ~GateFor(AppliedNow))
        => \E i \in 1..Len(log') : log'[i].kind = "gate_override"]_vars
 
-\* After an override, nothing is left under review: each such loop was
-\* latched into trajectory_lock as a permanent marker.
+\* After an irreversible override, no loop is left open in any state: what
+\* was under review is latched into trajectory_lock as a permanent marker,
+\* and nothing escalated or suppressed can be there at all (next property).
 OverrideLatchesReviews ==
   [][(~executed /\ executed' /\ AppliedNow = "irreversible" /\ ~GateOK)
-       => \A s \in Signals : state'[s] /= "under_review"]_vars
+       => \A s \in Signals : state'[s] \notin {"under_review", "escalated", "suppressed"}]_vars
+
+\* A structural review holds irreversible execution: nothing irreversible
+\* executes, by override or otherwise, while any of its signals is
+\* escalated or suppressed (Layer 4, Overrides; Escalation Conditions).
+\* Stated with its own set, not HeldStates, so that weakening the check
+\* (ReviewHold) cannot also weaken the property.
+NoIrreversibleExecutionPastReview ==
+  [][(~executed /\ executed' /\ AppliedNow = "irreversible")
+       => \A s \in Signals : state[s] \notin {"escalated", "suppressed"}]_vars
 
 \* A constraint closed by authority or role switch never lets the
 \* irreversible gate pass cleanly: clean execution at that class needs

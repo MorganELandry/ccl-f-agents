@@ -1997,6 +1997,20 @@ class Supervisor:
             raise TransitionRefused(f"unknown review {review_id!r}")
         if review.resolved:
             raise TransitionRefused(f"review {review_id} is already resolved")
+        # --- Independence: not by those who want the decision to proceed --
+        # A review that holds an irreversible decision cannot be resolved
+        # by that decision's accepting agent or by anyone who has requested
+        # its execution (Layer 4, Overrides).
+        conflicted = sorted({a for d in self.decisions.values() if not d.executed
+                             and self._applied_class(d) == ExecutionClass.IRREVERSIBLE
+                             and (review.scope == f"decision:{d.decision_id}"
+                                  or set(review.signal_ids) & set(d.signal_ids))
+                             for a in ({d.accepted_by} | d.requesters) if a})
+        if by in conflicted:
+            why = (f"{by} accepted or requested an irreversible decision that review "
+                   f"{review_id} holds; it must be resolved by someone else")
+            self._log("REVIEW_RESOLUTION_REFUSED", by, review=review_id, reason=why)
+            raise TransitionRefused(why)
         # --- Resolve it ----------------------------------------------------
         review.resolved_by = by
         review.model_update = model_update
@@ -3258,6 +3272,7 @@ class Supervisor:
         self._require_actor(by)
         d = self._decision(decision_id)
         self._tick()
+        d.requesters.add(by)
         sigs = self._decision_signals(d)
         score, factors = self.coherence(decision_id)
         failures: list[str] = []
@@ -3341,6 +3356,7 @@ class Supervisor:
             if undocumented:
                 failures.append(f"open loops not documented: {undocumented}")
         suppressed = [s.signal_id for s in sigs if s.state == S.SUPPRESSED]
+        hold: list[str] = []          # reviews that hold irreversible execution
         # --- Irreversible requirements -------------------------------------
         if applied == ExecutionClass.IRREVERSIBLE:
             # Escalation first: a suppressed signal before irreversible
@@ -3390,6 +3406,9 @@ class Supervisor:
                 set(r.signal_ids) & set(d.signal_ids) or r.scope == f"decision:{decision_id}")})
             if pending:
                 failures.append(f"unresolved structural reviews: {pending}")
+                # A structural review holds irreversible execution; it is
+                # not one more overridable failure (Layer 4, Overrides).
+                hold = pending
             # Open off-envelope/containment signals (implementation decision).
             off = [s.signal_id for s in sigs if s.is_open and s.operational_state in
                    (O.OFF_ENVELOPE, O.CONTAINMENT)]
@@ -3404,6 +3423,8 @@ class Supervisor:
 
         # --- Clean pass: execute -------------------------------------------
         # `not failures` is True when the list is empty.
+        # (`hold` is set above only for an irreversible decision with
+        # unresolved structural reviews.)
         result = GateResult(decision_id, applied, not failures, False,
                             bool(voids), failures, score, declared_class=d.execution_class)
         if not failures:
@@ -3421,6 +3442,33 @@ class Supervisor:
                       failures=failures,
                       architecture_void=bool(voids), coherence=score, factors=factors)
             return result
+
+        # --- Limits on overriding (Layer 4, Overrides) ----------------------
+        # 1. Unresolved structural reviews hold irreversible execution.
+        # 2. The accepting agent cannot override its own decision's gate.
+        # 3. With authority enforced, the overrider needs OVERRIDE power.
+        # Each refusal is logged with every reason that applies; nothing
+        # executes.
+        refusals = []
+        if hold:
+            refusals.append(f"unresolved structural reviews {hold} hold irreversible "
+                            "execution until each documents its Rule 8 model update; "
+                            "this cannot be overridden")
+        if by == d.accepted_by:
+            refusals.append(f"{by} accepted this decision and cannot override its gate; "
+                            "an override must come from another agent")
+        if not self.holds(by, Power.OVERRIDE, d.scope):
+            refusals.append(f"{by} does not hold override over {d.scope!r} "
+                            "(authority is granted, never inferred)")
+        if refusals:
+            d.ever_blocked = True
+            self._log("OVERRIDE_REFUSED", by, decision=decision_id, reasons=refusals,
+                      failures=failures, rationale=override_rationale,
+                      declared_class=d.execution_class, execution_class=applied,
+                      coherence=score, factors=factors)
+            return GateResult(decision_id, applied, False, False, bool(voids),
+                              failures + [f"override refused: {r}" for r in refusals],
+                              score, declared_class=d.execution_class)
 
         # Override: permitted, but permanent, attributed and consequential.
         self._log("GATE_OVERRIDE", by, decision=decision_id,

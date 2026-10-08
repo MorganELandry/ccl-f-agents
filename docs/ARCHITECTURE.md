@@ -76,7 +76,7 @@ If a signal has a registered closure authority and the closer is outside it, the
 
 ## Escalation (Layer 2)
 
-The ten escalation conditions each open a `StructuralReview`. Reviews are deduplicated per condition and scope: a repeat trigger adds its signals to the open review, logs `REVIEW_JOINED`, and escalates any added signal that is under review at once. A review is resolved only with a documented Rule 8 model update, and an escalated signal returns to review only then.
+The ten escalation conditions each open a `StructuralReview`. Reviews are deduplicated per condition and scope: a repeat trigger adds its signals to the open review, logs `REVIEW_JOINED`, and escalates any added signal that is under review at once. A review is resolved only with a documented Rule 8 model update, and an escalated signal returns to review only then. While unresolved, a review touching an irreversible decision holds it: no execution, override included (see [Overrides](#execution-gates-layer-4)).
 
 | Condition | Trigger in this runtime |
 |---|---|
@@ -147,6 +147,7 @@ The draft says a single agent must accept authorization (Rule 4) but not who may
 | `recommend` | `recommend()`: record a recommendation, which changes no gate | when made |
 | `authorize` | `accept_decision()`: the Rule 4 acceptance | when made, and again at execution |
 | `execute` | `request_execution()` | at the request, before any other gate; not overridable |
+| `override` | `request_execution(override_rationale=...)` | at the override; never available to the decision's accepting agent |
 
 - A root holds every power over every scope and may delegate it. Anyone else holds a power only through a `Grant`, made with `grant()` by someone who holds it **delegably** over that scope.
 - A grant can't be wider than the grant that backs its grantor: same power, the same scope or a narrower one, delegable only if passed on as delegable, and an expiry no later than its parent's.
@@ -156,7 +157,13 @@ The draft says a single agent must accept authorization (Rule 4) but not who may
 - Choosing a decision's scope is itself an act of authority: only a root or a holder of delegable AUTHORIZE over a scope can put a decision there (`register_decision(scope=...)` or `assign_scope()`).
 - With no roots set, nothing is enforced and anyone may accept, as before.
 
-Other gate failures, apart from that relabeling block, can be overridden. An override:
+**Overrides** (draft, Layer 4, Execution Gates, Overrides). Three limits apply, and a refused override is logged as `OVERRIDE_REFUSED` with every reason:
+
+- **Structural reviews hold irreversible execution.** Any unresolved review touching an irreversible decision (on the decision, or naming one of its signals) blocks it without override. A suppressed signal opens one at each request, so it holds the decision until it re-enters review. `resolve_review()` refuses (`REVIEW_RESOLUTION_REFUSED`) an agent who accepted, or has requested execution of, an unexecuted irreversible decision the review touches.
+- **The accepting agent cannot override.** At every class.
+- **Override is a power.** With authority enforced, the overrider needs `override` over the decision's scope.
+
+Within those limits, other gate failures, apart from the relabeling block, can be overridden. An override:
 
 - is logged with identity, rationale and time (`GATE_OVERRIDE`);
 - reports any architecture void;

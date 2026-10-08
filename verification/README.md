@@ -33,7 +33,7 @@ A passing check means no counterexample exists **within the bounds** below. It i
 - re-entry conditions: successor, a different agent, a hold lifted, a resolution condition registered at exit and met;
 - the Rule 8 model update;
 - Rule 4 acceptance;
-- the three gates: routine (signals registered), elevated (each signal at least classified) and irreversible (a constraint counts as resolved only if evidence-closed or exited terminal/superseded), with the logged override;
+- the three gates: routine (signals registered), elevated (each signal at least classified) and irreversible (a constraint counts as resolved only if evidence-closed or exited terminal/superseded), with the logged override, which no irreversible decision gets while a signal is escalated or suppressed (the review hold);
 - Execution Class Assignment: the decision may be registered at any class, with or without a tested reversal path; the gate applies the declared class only with that path, otherwise irreversible; reclassification, refused requests, the relabel-after-refusal review, and its resolution;
 - Closure Chain: one signal's closing evidence may depend on another's (or each on the other, a cycle); soundness is computed as the runtime computes it, from no sound loops upward; a reopen upstream weakens every closure downstream and logs each one;
 - the decision-level External Evidence Source: cited in the Rule 4 acceptance, or supplied by a chain-sound evidence closure.
@@ -64,7 +64,8 @@ In the lifecycle configuration s1's evidence depends on s2. The lifecycle run's 
 | `EveryChangeLogged` | every state change is logged in the same step | Audit Trail |
 | `Rule4` | execution implies acceptance | Rule 4 |
 | `OpenLoopExecutionLogged` | executing with open loops leaves an override on record | Execution Gates |
-| `OverrideLatchesReviews` | after an override, no loop is left under review; each is latched in trajectory_lock | Layer 4, lock-in closure |
+| `OverrideLatchesReviews` | after an irreversible override, no loop is left under review, escalated or suppressed; each one under review is latched in trajectory_lock | Layer 4, lock-in closure |
+| `NoIrreversibleExecutionPastReview` | nothing irreversible executes, by override or otherwise, while a signal is escalated or suppressed | Layer 4, Overrides; Escalation Conditions |
 | `NoCleanPassOverAuthorityClosure` | the irreversible gate never passes cleanly over a constraint closed by authority or role switch | Reversibility Logic; Execution Gates |
 | `NoCleanPassOverBrokenChain` | the irreversible gate never passes cleanly over an evidence closure whose chain is broken, or without an External Evidence Source | Closure Chain; Execution Gates |
 | `ChainWeakeningLogged` | a closure that loses its standing is logged in the same step | Closure Chain ("the weakened link is logged") |
@@ -76,7 +77,7 @@ In the lifecycle configuration s1's evidence depends on s2. The lifecycle run's 
 | `NoExecutionWhileRelabelOpen` | nothing executes, by override or otherwise, while that review is open | Execution Class Assignment |
 | `ReclassificationLogged` | every change of class or reversal support is logged | Execution Class Assignment |
 
-**Not vacuous.** `tests/test_verification.py` plants ten faults in copies of the model and confirms TLC catches each:
+**Not vacuous.** `tests/test_verification.py` plants twelve faults in copies of the model and confirms TLC catches each:
 - `classified → closed_authority` added to the table: `NoCloseBeforeReview` is violated;
 - the pre-October-2026 gate restored, which let an authority-closed constraint pass: `NoCleanPassOverAuthorityClosure` is violated;
 - the declared class trusted as given: `LowerClassNeedsReversal` is violated;
@@ -85,7 +86,8 @@ In the lifecycle configuration s1's evidence depends on s2. The lifecycle run's 
 - only declared-class lowerings counted, so adding evidence after a refusal slips through: `RelabelAfterRefusalEscalates` is violated;
 - soundness computed without looking upstream: `SoundAllTheWayUp` is violated, and on a cycle `CycleNeverSound` too;
 - a reopen that doesn't log the closures it weakens: `ChainWeakeningLogged` is violated;
-- the External Evidence Source dropped from the gate: `NoCleanPassOverBrokenChain` is violated.
+- the External Evidence Source dropped from the gate: `NoCleanPassOverBrokenChain` is violated;
+- an override allowed past an escalated signal, or a suppressed signal not counted as held: `NoIrreversibleExecutionPastReview` (or `OverrideLatchesReviews`) is violated. These run in a small test-only configuration (one irreversible decision, no relabels or exits, a 7-record log) that reaches escalate-then-override in seconds.
 
 ## TLA+: `tla/FederatedClosure.tla`
 

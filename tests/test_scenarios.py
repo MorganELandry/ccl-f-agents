@@ -34,14 +34,14 @@ THE PLAYBILL
     Scene 3   test_challenger_waivers_refused_after_threshold
     Scene 4   test_challenger_nominal_classification_refused
     Scene 5   test_challenger_framing_suppresses_uncertainty
-    Scene 6   test_challenger_launch_blocked_then_overridden
-    Scene 7   test_challenger_open_constraints_are_not_latched  (impl. decision)
+    Scene 6   test_challenger_launch_blocked_and_override_refused
+    Scene 7   test_challenger_what_it_takes_to_launch
     Scene 8   test_scenario_authority_counts_escalate         (was a spec mismatch, now fixed;
                                                                 parametrized, 2 runs)
     Scene 9   test_therac25_closures_refused_after_threshold
     Scene 10  test_therac25_captured_channel_blocks_execution
     Scene 11  test_mcas_unstable_classification_and_captured_channel
-    Scene 12  test_mcas_override_is_open_loop_execution
+    Scene 12  test_mcas_override_refused
 
 READER'S NOTE — a module-level cache
     Replaying a scenario takes a moment (the graph is rebuilt each time).
@@ -63,7 +63,8 @@ READER'S NOTE — a module-level cache
 import pytest
 
 from cclf import (
-    Advisor, AuditTrail, CommitmentState, EscalationCondition, OperationalState, replay,
+    Advisor, AuditTrail, CommitmentState, EscalationCondition, OperationalState,
+    TransitionRefused, replay,
 )
 from scenarios import SCENARIOS
 from stagehands import entries
@@ -225,81 +226,107 @@ def test_challenger_framing_suppresses_uncertainty():
 
 
 # ===========================================================================
-# SCENE 6 — CHALLENGER: THE GATE, THEN THE OVERRIDE
+# SCENE 6 — CHALLENGER: THE GATE, THEN THE REFUSED OVERRIDE
 # Proves: the launch gate is blocked (open constraints, unreviewed
-# recurrence, Layer 0 stewardship void), and then proceeds only through a
-# logged override by the accepting agent.
+# recurrence, Layer 0 stewardship void), and the override that follows is
+# refused (Layer 4, Overrides): unresolved structural reviews hold an
+# irreversible decision, and the accepting agent cannot override its gate.
 # ===========================================================================
 
-def test_challenger_launch_blocked_then_overridden():
+def test_challenger_launch_blocked_and_override_refused():
     """
-    EXECUTION_BLOCKED, then GATE_OVERRIDE by kilminster; the launch executes.
+    EXECUTION_BLOCKED, then OVERRIDE_REFUSED for kilminster; no launch.
 
     Enter:   (nothing)
-    Exit:    passes if the blocked entry precedes the override, the blocked
-             failures include open constraints, unreviewed recurrence and
-             AP-A, the override names kilminster with a rationale, and
-             the decision is executed
+    Exit:    passes if the blocked failures include open constraints,
+             unreviewed recurrence and AP-A; the override is refused for
+             both reasons; nothing executed, overrode or latched
     """
     # PLAYERS IN THIS SCENE
-    #   events     the audit event names in order
-    #   blocked    the EXECUTION_BLOCKED entry
-    #   override   the GATE_OVERRIDE entry
     #   sv         the Challenger replay's Supervisor
-    #   failures   the blocked entry's failures, joined with " | "
-    #   needle     each failure text that must appear
+    #   blocked    the EXECUTION_BLOCKED entry
+    #   failures   its failures, joined with " | "
+    #   refused    the OVERRIDE_REFUSED entry
+    #   reasons    its reasons, joined
 
     sv, _ = replayed("challenger")
-    events = sv.audit.events()
-    assert events.index("EXECUTION_BLOCKED") < events.index("GATE_OVERRIDE")
     [blocked] = entries(sv, "EXECUTION_BLOCKED")
     failures = " | ".join(blocked.payload["failures"])
     for needle in ("constraint/anomaly loops not evidence-closed",
                    "recurrence groups not reviewed", "AP-A"):
         assert needle in failures
     assert blocked.payload["architecture_void"] is True
-    [override] = entries(sv, "GATE_OVERRIDE")
-    assert override.actor == "kilminster" and override.payload["rationale"]
-    assert sv.decisions["launch-51L"].executed
-    assert "OPEN_LOOP_IRREVERSIBLE_EXECUTION" in events
+    [refused] = entries(sv, "OVERRIDE_REFUSED")
+    reasons = " | ".join(refused.payload["reasons"])
+    assert refused.actor == "kilminster"
+    assert "hold irreversible execution" in reasons and "cannot be overridden" in reasons
+    assert "kilminster accepted this decision" in reasons
+    assert not sv.decisions["launch-51L"].executed
+    assert entries(sv, "GATE_OVERRIDE") == []
+    assert entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION") == []
 
 
 # ===========================================================================
-# SCENE 7 — CHALLENGER: WHAT THE LOCK DOES NOT CATCH
-# Proves (implementation decision): at the override every open constraint
-# is ESCALATED, not under_review, so none is latched into trajectory_lock;
-# the lock-in escalation still lists them as still open.
+# SCENE 7 — CHALLENGER: WHAT IT WOULD TAKE TO LAUNCH
+# Proves: the runtime leaves one way forward, the one the draft names.
+# Another agent's override is still refused while the reviews are open;
+# nobody who accepted or requested the launch may resolve them; once
+# someone else documents each Rule 8 model update, and the suppressed
+# signal is brought back into view, an override by an agent other than the
+# acceptor goes ahead, and every constraint loop still under review is
+# latched into trajectory lock. (The agents after the
+# replay are hypothetical roles, not historical claims.)
 # ===========================================================================
 
-def test_challenger_open_constraints_are_not_latched():
+def test_challenger_what_it_takes_to_launch():
     """
-    Implementation-decision test. The spec's state machine records lock-in
-    as under_review -> trajectory_lock (Layer 4, Commitment State Machine)
-    and lists no
-    escalated -> trajectory_lock transition, yet calls trajectory_lock "a
-    permanent marker that the loop remained open at the point irreversible
-    execution proceeded". The code latches only signals under review, so in
-    the Challenger replay no signal reaches trajectory_lock. The five
-    escalated constraints, and the two closed by authority (which the
-    irreversible gate does not accept, Reversibility Logic), appear only in
-    the LOCK_IN_WITH_OPEN_CONSTRAINTS detail.
+    Override refused while reviews are open; conflicted resolvers refused;
+    independent resolution, then a separate override, executes with lock-in.
 
     Enter:   (nothing)
-    Exit:    passes if nothing is trajectory_lock, the open-loop execution
-             entry has locked == [] and still_open naming those seven
-             constraints, and the lock-in escalation was raised
+    Exit:    passes if each step behaves as described above
     """
     # PLAYERS IN THIS SCENE
-    #   olie   the OPEN_LOOP_IRREVERSIBLE_EXECUTION entry
-    #   sv     the Challenger replay's Supervisor
+    #   sv        a fresh Challenger replay (not the cached one: this test
+    #             changes it)
+    #   r         each open review
+    #   result    the final GateResult
+    #   locked    signals latched into trajectory lock
 
-    sv, _ = replayed("challenger")
-    assert not any(s.state == S.TRAJECTORY_LOCK for s in sv.signals.values())
-    [olie] = entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION")
-    assert olie.payload["locked"] == []
-    assert sorted(olie.payload["still_open"]) == sorted(
-        FRR_LATE + ["cold-oring-no-launch", "constraint-frr-2", "launch-constraint-51F"])
-    assert any(r.condition == E.LOCK_IN_WITH_OPEN_CONSTRAINTS for r in sv.reviews)
+    sv = replay(SCENARIOS["challenger"], advisor=OFFLINE_ADVISOR)
+    # Another agent's override: still held by the reviews.
+    held = sv.request_execution("launch-51L", "launch-director", override_rationale="go")
+    assert not held.permitted and any("hold irreversible execution" in f for f in held.failures)
+    # Those who want the launch cannot resolve what holds it.
+    open_ids = [r.review_id for r in sv.open_reviews()]
+    for conflicted in ("kilminster", "launch-director"):
+        with pytest.raises(TransitionRefused):
+            sv.resolve_review(open_ids[0], conflicted, "erosion is acceptable")
+    # An independent reviewer documents each model update.
+    for r in sv.open_reviews():
+        sv.resolve_review(r.review_id, "independent-review-board",
+                          "joint erosion is a design defect: a new launch constraint "
+                          "with a temperature floor and a redesign requirement")
+    # A suppressed signal reopens a review at every request: it has to be
+    # brought back into view first.
+    still = sv.request_execution("launch-51L", "launch-director", override_rationale="go")
+    assert not still.permitted
+    sv.reenter_suppressed("seal-uncertainty", "independent-review-board",
+                          "the burden-of-proof frame is withdrawn; uncertainty back in review")
+    for r in sv.open_reviews():
+        sv.resolve_review(r.review_id, "independent-review-board",
+                          "suppression of a safety uncertainty by framing is a coordination "
+                          "failure: framing signals now require evidence closure")
+    result = sv.request_execution("launch-51L", "launch-director",
+                                  override_rationale="proceeding under the new constraint")
+    assert result.permitted and result.overridden
+    locked = sorted(s.signal_id for s in sv.signals.values() if s.state == S.TRAJECTORY_LOCK)
+    assert "cold-oring-no-launch" in locked             # the night-before constraint
+    assert sv.signals["seal-uncertainty"].state == S.UNDER_REVIEW   # back in view; an
+    #   uncertainty loop is not latched (only constraint and anomaly loops are)
+    assert set(FRR_LATE) <= set(locked)                 # escalated, then released by review
+    assert not any(s.state in (S.ESCALATED, S.SUPPRESSED)
+                   for s in sv.signals.values() if s.high_consequence)
 
 
 # ===========================================================================
@@ -404,25 +431,25 @@ def test_mcas_unstable_classification_and_captured_channel():
 
 
 # ===========================================================================
-# SCENE 12 — MCAS: INTO SERVICE ON AN OVERRIDE
-# Proves: (Key Definitions, Open-Loop Irreversible Execution) proceeding is
-# permitted only with explicit, permanently logged authorization.
+# SCENE 12 — MCAS: THE OVERRIDE REFUSED
+# Proves: (Layer 4, Overrides) an unresolved structural review holds the
+# irreversible decision, and the accepting agent cannot override its gate.
 # ===========================================================================
 
-def test_mcas_override_is_open_loop_execution():
+def test_mcas_override_refused():
     """
-    enter-service executes only through a logged override by boeing.
+    enter-service does not execute; boeing's override is refused.
 
     Enter:   (nothing)
-    Exit:    passes if GATE_OVERRIDE (actor boeing) and
-             OPEN_LOOP_IRREVERSIBLE_EXECUTION are logged and it executed
+    Exit:    passes if OVERRIDE_REFUSED (actor boeing) names both reasons and
+             nothing executed
     """
-    # PLAYERS IN THIS SCENE
-    #   sv   the MCAS replay's Supervisor
-
     sv, _ = replayed("mcas")
-    assert [e.actor for e in entries(sv, "GATE_OVERRIDE")] == ["boeing"]
-    assert len(entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION")) == 1
-    assert sv.decisions["enter-service"].executed
+    [refused] = entries(sv, "OVERRIDE_REFUSED")
+    reasons = " | ".join(refused.payload["reasons"])
+    assert refused.actor == "boeing"
+    assert "hold irreversible execution" in reasons and "boeing accepted" in reasons
+    assert entries(sv, "GATE_OVERRIDE") == []
+    assert not sv.decisions["enter-service"].executed
 
 # EXEUNT — end of file.

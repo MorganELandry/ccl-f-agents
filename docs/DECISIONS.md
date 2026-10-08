@@ -67,7 +67,11 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
 - **Open off-envelope or containment signals block irreversible execution.** This follows the Key Definitions: off-envelope needs evidence-based classification before irreversible execution, and containment needs independent steward review.
 - **Suppressed signals.** An irreversible request over a suppressed signal escalates first, so the review it opens blocks that same request.
 - **Overrides.**
-  - Every gate failure can be overridden except Rule 4 acceptance and the block on a decision whose class was lowered after a refused request (the draft says this one cannot be overridden).
+  - Every gate failure can be overridden except Rule 4 acceptance, the block on a decision whose class was lowered after a refused request, and (since the draft's October 2026 Overrides text) any unresolved structural review touching an irreversible decision.
+  - **Which reviews hold.** Those the gate already listed as "unresolved structural reviews": scoped to the decision, or naming one of its signals. A review scoped to a recurrence group holds through the group's signals.
+  - **Who may not resolve a holding review:** the accepting agent and every agent who has requested execution of an unexecuted irreversible decision the review touches. The registrant is not excluded; the draft names those who accepted or requested it.
+  - **The accepting agent cannot override**, at any class. With authority enforced, overriding needs the `override` power, a fourth power separate from `execute`.
+  - **No new transitions.** `escalated → trajectory_lock` and `suppressed → trajectory_lock` were considered and not added: the hold means no irreversible execution can pass an escalated or suppressed loop. The TLA+ model checks this (`NoIrreversibleExecutionPastReview`).
   - A Layer 0 void can be overridden. It is still reported, and the override log records it.
   - Lock-in latching applies only to constraint and anomaly signals that are under review, the only state the transition table lets move to `trajectory_lock`. Those that fail the gate in any other way (open in another state, or closed without chain-sound evidence) are logged as still open.
   - An elevated override latches nothing.

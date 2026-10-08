@@ -23,19 +23,27 @@ tests/test_closure.py when no escalation is pending), records the framing
 signal's suppression of the open uncertainty, escalates the decision's three
 authority closures when the decision is registered and the suppressed signal
 when execution is requested, and blocks the irreversible launch decision.
-The launch then proceeds only through a logged override. The override
-records open-loop irreversible execution and escalates lock-in with open
-constraint loops. None is latched into trajectory lock (v0.2 defines
-that transition only from under_review): the open constraints are by then
-escalated, and the rest were closed by authority, which the irreversible
-gate does not accept as resolution, so all of them are listed still open.
+
+The override is then refused, for two reasons the draft has stated since
+October 2026 (Layer 4, Execution Gates, Overrides). Four structural reviews
+are unresolved, and a structural review holds irreversible execution until
+it documents its Rule 8 model update; that cannot be overridden. And the
+agent overriding is the agent who accepted the decision, which an override
+may not be. The launch does not execute. The only way forward the runtime
+leaves open is the one the draft names: someone who neither accepted nor
+requested the launch documents what the five recurring erosion waivers
+mean for the coordination model.
+
+(Before October 2026 the override went through: the launch executed, and
+the open constraints, escalated by then, were listed as still open but
+latched into nothing.)
 
 THE PLAYBILL
     Scene 1  the architecture record             (Layer 0)
     Scene 2  the erosion recurrence group        (Rule 7: first constraint, then FRRs 2-6)
     Scene 3  the night before launch             (Rule 2, Rule 3, Rule 1 framing,
                                                   Closure Quality)
-    Scene 4  the irreversible decision           (Rule 4 acceptance, gate, override)
+    Scene 4  the irreversible decision           (Rule 4 acceptance, gate, refused override)
 
 READER'S NOTE — the event format
     Each event is a plain dict. "op" names the Supervisor operation to run
@@ -211,9 +219,9 @@ CHALLENGER: list[dict] = [
     # the authority-closure count (three authority closures: 51-F, FRR 2 and
     # the frame). Rule 4 acceptance, then an execution request (blocked; it
     # also escalates the suppressed seal-uncertainty signal), then the same
-    # request with an override_rationale (permitted, permanently logged; it
-    # escalates lock-in with open constraint loops and locks nothing, since
-    # no constraint is still under_review).
+    # request with an override_rationale, which is refused: the unresolved
+    # structural reviews hold irreversible execution, and the accepting agent
+    # cannot override its own decision's gate (Layer 4, Overrides).
     # =======================================================================
     # The signal list is built with + and a list comprehension (FRRs 2-6).
     {"op": "register_decision", "decision_id": "launch-51L",
@@ -228,7 +236,7 @@ CHALLENGER: list[dict] = [
      "note": "the gate as it would have stood"},
     {"op": "request_execution", "decision_id": "launch-51L", "by": "kilminster",
      "override_rationale": "management decision to recommend launch",
-     "note": "the override over open constraint loops (spec: Lock-in Closure)"},
+     "note": "the override over open constraint loops: refused (Layer 4, Overrides)"},
 ]
 
 # EXEUNT — end of file.

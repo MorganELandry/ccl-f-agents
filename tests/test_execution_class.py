@@ -370,7 +370,7 @@ def test_override_audit_records_declared_and_applied_class():
     sv = Supervisor()
     authority_world(sv)
     register(sv, ROUT)
-    result = sv.request_execution("d1", DIRECTOR, override_rationale="risk accepted")
+    result = sv.request_execution("d1", "risk-officer", override_rationale="risk accepted")
     assert result.overridden
     assert result.execution_class is IRR
     assert result.declared_class is ROUT

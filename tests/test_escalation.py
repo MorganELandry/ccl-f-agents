@@ -269,7 +269,7 @@ def test_lock_in_with_open_constraints_escalates(sv):
     """
     to_review(sv, "c")
     decision(sv, "d", ["c"])
-    sv.request_execution("d", "director", override_rationale="schedule")
+    sv.request_execution("d", "risk-officer", override_rationale="schedule")
     assert any(r.condition == E.LOCK_IN_WITH_OPEN_CONSTRAINTS and r.scope == "decision:d"
                for r in sv.reviews)
 

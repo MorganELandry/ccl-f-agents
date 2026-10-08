@@ -1,7 +1,7 @@
 """
 THE INTERLOCK
-A Play in Twenty-Three Scenes
-=============================
+A Play in Twenty-Nine Scenes
+============================
 
 PROLOGUE
 --------
@@ -63,6 +63,19 @@ THE PLAYBILL
     Scene 21  test_successor_who_is_the_steward_is_a_void   (found by the Alloy model)
     Scene 22  test_adding_reversal_evidence_after_a_block_is_a_lowering
     Scene 23  test_relabel_review_cannot_be_overridden
+    Scene 24  test_acceptor_cannot_override_own_gate         (parametrized, 3 runs)
+    Scene 25  test_unresolved_review_holds_irreversible_execution
+    Scene 26  test_review_hold_is_for_irreversible_decisions
+    Scene 27  test_those_who_want_it_cannot_resolve_the_review
+    Scene 28  test_suppressed_signal_holds_until_back_in_view
+    Scene 29  test_override_needs_override_power_when_authority_is_enforced
+
+Scenes 24-29 test the override limits added in October 2026 (Layer 4,
+Execution Gates, Overrides): the accepting agent cannot override its own
+decision's gate; an unresolved structural review holds an irreversible
+decision, override or not; it is resolved only by someone who neither
+accepted nor requested that decision; and, with authority enforced,
+overriding is its own granted power.
 """
 
 # ===========================================================================
@@ -70,7 +83,7 @@ THE PLAYBILL
 # ---------------------------------------------------------------------------
 # pytest       fixtures, parametrize, raises.
 # cclf         Architecture, ClosureType, CommitmentState, EscalationCondition,
-#              ExecutionClass, ExitType, OperationalState, Settings,
+#              ExecutionClass, ExitType, OperationalState, Power, Settings,
 #              SignalType, Supervisor, TransitionRefused.
 # stagehands   CUST, TECH, PROCESS, to_review, add_ees, decision, entries.
 # ===========================================================================
@@ -79,7 +92,7 @@ import pytest
 
 from cclf import (
     Architecture, ClosureType, CommitmentState, EscalationCondition, ExecutionClass, ExitType,
-    OperationalState, Settings, SignalType, Supervisor, TransitionRefused,
+    OperationalState, Power, Settings, SignalType, Supervisor, TransitionRefused,
 )
 from stagehands import CUST, PROCESS, TECH, add_ees, decision, entries, to_review
 
@@ -450,7 +463,7 @@ def test_override_latches_open_constraints_into_trajectory_lock(sv):
     to_review(sv, "c")
     to_review(sv, "u", signal_type=SignalType.UNCERTAINTY)
     decision(sv, "d", ["c", "u"])
-    result = sv.request_execution("d", "director", override_rationale="proceed")
+    result = sv.request_execution("d", "risk-officer", override_rationale="proceed")
     assert result.locked_signals == ["c"]
     assert sv.signals["c"].state == S.TRAJECTORY_LOCK
     rec = sv.signals["c"].closures[-1]
@@ -583,7 +596,7 @@ def test_elevated_override_does_not_lock(sv):
     to_review(sv, "c")
     sv.register_signal("u", SignalType.UNCERTAINTY, "d", "eng", TECH, PROCESS)
     decision(sv, "d", ["c", "u"], X.ELEVATED)
-    result = sv.request_execution("d", "director", override_rationale="proceed")
+    result = sv.request_execution("d", "risk-officer", override_rationale="proceed")
     assert result.permitted and result.overridden and result.locked_signals == []
     assert sv.signals["c"].state == S.UNDER_REVIEW
     assert entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION") == []
@@ -744,8 +757,160 @@ def test_relabel_review_cannot_be_overridden(sv):
     sv.reclassify_decision("d", X.ROUTINE, "director", "it can be rolled back",
                            reversal_path="documented rollback",
                            reversal_evidence_ids=["rollback-drill"])
-    result = sv.request_execution("d", "director", override_rationale="proceed")
+    result = sv.request_execution("d", "risk-officer", override_rationale="proceed")
     assert not result.permitted and not result.overridden
     assert entries(sv, "GATE_OVERRIDE") == []
+
+# ===========================================================================
+# SCENE 24 — THE SAME HAND TWICE
+# Proves: (Layer 4, Overrides) the agent who accepted a decision cannot
+# override its gate, at any class; another agent can.
+# ===========================================================================
+
+@pytest.mark.parametrize("cls", list(X))
+def test_acceptor_cannot_override_own_gate(sv, cls):
+    """
+    The acceptor's override is refused and logged; a second agent's goes ahead.
+
+    Enter:   sv    fixture
+             cls   each execution class
+    Exit:    passes if director's override is refused (OVERRIDE_REFUSED,
+             nothing executed) and risk-officer's is permitted
+    """
+    sv.register_signal("u", SignalType.UNCERTAINTY, "d", "eng", TECH, PROCESS)  # only registered
+    decision(sv, "d", ["u", "missing"], cls)        # fails at every class
+    refused = sv.request_execution("d", "director", override_rationale="mine to call")
+    assert not refused.permitted and not refused.overridden
+    assert any("director accepted this decision" in f for f in refused.failures)
+    assert entries(sv, "OVERRIDE_REFUSED") and not sv.decisions["d"].executed
+    permitted = sv.request_execution("d", "risk-officer", override_rationale="second check")
+    assert permitted.permitted and permitted.overridden
+
+
+# ===========================================================================
+# SCENE 25 — A REVIEW IS A HOLD, NOT A NOTICE
+# Proves: (Layer 4, Overrides; Escalation Conditions) an unresolved
+# structural review touching an irreversible decision holds it; no one's
+# override goes through.
+# ===========================================================================
+
+def test_unresolved_review_holds_irreversible_execution(sv):
+    """
+    An off-envelope constraint escalates; the irreversible override is refused.
+
+    Enter:   sv   fixture
+    Exit:    passes if the override is refused naming the review, nothing
+             executes, and no GATE_OVERRIDE is logged
+    """
+    to_review(sv, "c", state=O.OFF_ENVELOPE)        # escalates: a structural review
+    assert sv.signals["c"].state == S.ESCALATED
+    decision(sv, "d", ["c"])
+    result = sv.request_execution("d", "risk-officer", override_rationale="schedule")
+    assert not result.permitted
+    assert any("hold irreversible execution" in f and "cannot be overridden" in f
+               for f in result.failures)
+    assert entries(sv, "GATE_OVERRIDE") == [] and not sv.decisions["d"].executed
+
+
+# ===========================================================================
+# SCENE 26 — ONLY WHERE IT CANNOT BE UNDONE
+# Proves: the hold applies to irreversible decisions; an elevated decision
+# with a tested reversal path is not held by the same review.
+# ===========================================================================
+
+def test_review_hold_is_for_irreversible_decisions(sv):
+    """
+    The same escalated signal does not hold a reversible (elevated) decision.
+
+    Enter:   sv   fixture
+    Exit:    passes if the elevated decision executes
+    """
+    to_review(sv, "c", state=O.OFF_ENVELOPE)
+    decision(sv, "d", ["c"], X.ELEVATED)            # with a tested reversal path
+    assert sv.request_execution("d", "director").permitted
+
+
+# ===========================================================================
+# SCENE 27 — NOT BY THOSE WHO WANT IT TO GO
+# Proves: (Layer 4, Overrides) a review holding an irreversible decision
+# cannot be resolved by its accepting agent or by anyone who requested its
+# execution. Resolved by someone else, the decision can proceed (here by an
+# override from a second agent, which latches the open constraint).
+# ===========================================================================
+
+def test_those_who_want_it_cannot_resolve_the_review(sv):
+    """
+    Acceptor and requester are refused (REVIEW_RESOLUTION_REFUSED); an
+    independent reviewer resolves it; then a second agent's override works.
+
+    Enter:   sv   fixture
+    Exit:    passes as described
+    """
+    to_review(sv, "c", state=O.OFF_ENVELOPE)
+    decision(sv, "d", ["c"])
+    sv.request_execution("d", "launch-manager")     # a requester
+    [review] = sv.open_reviews()
+    for conflicted in ("director", "launch-manager"):
+        with pytest.raises(TransitionRefused):
+            sv.resolve_review(review.review_id, conflicted, "it is fine")
+    assert len(entries(sv, "REVIEW_RESOLUTION_REFUSED")) == 2
+    sv.resolve_review(review.review_id, "review-board",
+                      "off-envelope operation now requires test data before any waiver")
+    result = sv.request_execution("d", "launch-manager", override_rationale="proceed")
+    assert result.permitted and result.overridden
+    assert sv.signals["c"].state == S.TRAJECTORY_LOCK
+
+
+# ===========================================================================
+# SCENE 28 — WHAT WAS PUT OUT OF SIGHT MUST COME BACK INTO VIEW
+# Proves: a suppressed constraint holds an irreversible decision: each
+# request opens a review (Escalation Conditions), and it holds. Re-entry
+# plus an independent resolution releases it.
+# ===========================================================================
+
+def test_suppressed_signal_holds_until_back_in_view(sv):
+    """
+    Suppressed: refused even after the review is resolved; re-entered: goes.
+
+    Enter:   sv   fixture
+    Exit:    passes as described
+    """
+    to_review(sv, "c")
+    sv.suppress("c", "manager", "not now")
+    decision(sv, "d", ["c"])
+    assert not sv.request_execution("d", "risk-officer", override_rationale="go").permitted
+    for r in sv.open_reviews():
+        sv.resolve_review(r.review_id, "review-board", "suppression is now itself escalated")
+    # Still suppressed: the next request opens a new review, which holds.
+    assert not sv.request_execution("d", "ops", override_rationale="go").permitted
+    sv.reenter_suppressed("c", "review-board", "back in view")
+    for r in sv.open_reviews():
+        sv.resolve_review(r.review_id, "review-board", "suppression is now itself escalated")
+    assert sv.request_execution("d", "ops2", override_rationale="go").permitted
+
+
+# ===========================================================================
+# SCENE 29 — OVERRIDING IS A GRANTED POWER
+# Proves: with authority enforced, an override needs OVERRIDE power over
+# the decision's scope (ACT VIII, Scene 2b), separate from EXECUTE.
+# ===========================================================================
+
+def test_override_needs_override_power_when_authority_is_enforced():
+    """
+    ops holds EXECUTE: its override is refused; granted OVERRIDE, it works.
+
+    Enter:   (nothing)
+    Exit:    passes as described
+    """
+    sv = Supervisor(Settings(authority_roots=frozenset({"root"})))
+    sv.grant("director", Power.AUTHORIZE, "d", by="root")
+    sv.grant("ops", Power.EXECUTE, "d", by="root")
+    to_review(sv, "c")
+    decision(sv, "d", ["c"])
+    refused = sv.request_execution("d", "ops", override_rationale="go")
+    assert not refused.permitted
+    assert any("does not hold override" in f for f in refused.failures)
+    sv.grant("ops", Power.OVERRIDE, "d", by="root")
+    assert sv.request_execution("d", "ops", override_rationale="go").permitted
 
 # EXEUNT — end of file.

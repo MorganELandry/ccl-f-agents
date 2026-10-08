@@ -1134,7 +1134,7 @@ def test_override_of_new_requirements_is_logged():
     assert all(f.startswith(NEW_MSGS) for f in blocked.failures)
     assert entries(sv, "GATE_OVERRIDE") == []
     # --- With override: proceeds, failures stay visible, override logged ----
-    overruled = sv.request_execution("d1", DIRECTOR,
+    overruled = sv.request_execution("d1", "risk-officer",
                                      override_rationale="launch window; rig risk accepted")
     assert overruled.overridden
     assert overruled.permitted

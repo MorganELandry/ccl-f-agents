@@ -1,7 +1,7 @@
 """
 THE MODELS AND THE CODE AGREE
-A Play in Fourteen Scenes
-===============================
+A Play in Fifteen Scenes
+==============================
 
 PROLOGUE
 --------
@@ -41,6 +41,8 @@ THE PLAYBILL
                                                       parametrized, 3 runs)
     Scene 14 test_tlc_catches_federation_faults      (needs Java + TLA2TOOLS_JAR;
                                                       parametrized, 9 runs)
+    Scene 15 test_tlc_catches_review_hold_faults     (needs Java + TLA2TOOLS_JAR;
+                                                      parametrized, 2 runs)
 
 READER'S NOTE — regular expressions
     re.findall(r'<<"(\\w+)", "(\\w+)">>', text) finds every TLA+ pair such as
@@ -129,6 +131,29 @@ CHAIN_CFG = ((TLA_FILE.parent / "Chain.cfg").read_text()
              .replace("MaxLog = 12", "MaxLog = 10"))
 CYCLE_CFG = FAST_CFG.replace("MaxLog = 5", "MaxLog = 6").replace("CycleBack = FALSE",
                                                                  "CycleBack = TRUE")
+
+# REVIEW_CFG — Scene 15: one signal, the decision irreversible, no relabels
+#   or exits, a 7-record log: just deep enough for register, classify,
+#   review, escalate (or suppress), accept and override. Seconds to check.
+REVIEW_CFG = ((TLA_FILE.parent / "Classes.cfg").read_text()
+              .replace('DeclaredInit = {"routine", "elevated", "irreversible"}',
+                       'DeclaredInit = {"irreversible"}')
+              .replace("ReversalInit = {FALSE, TRUE}", "ReversalInit = {FALSE}")
+              .replace("Reclassify = TRUE", "Reclassify = FALSE")
+              .replace("Exits = TRUE", "Exits = FALSE"))
+
+# REVIEW_FAULTS — planted faults for Scene 15 (Layer 4, Overrides): name ->
+#   (current text, planted text, properties of which TLC must report one).
+REVIEW_FAULTS = {
+    "override-past-a-structural-review": (
+        "  /\\ accepted /\\ ~executed /\\ ~RelabelOpen /\\ ~ReviewHold /\\ ~GateFor(AppliedNow)",
+        "  /\\ accepted /\\ ~executed /\\ ~RelabelOpen /\\ ~GateFor(AppliedNow)",
+        ("NoIrreversibleExecutionPastReview", "OverrideLatchesReviews")),
+    "suppressed-loops-do-not-hold": (
+        'HeldStates == {"escalated", "suppressed"}',
+        'HeldStates == {"escalated"}',
+        ("NoIrreversibleExecutionPastReview", "OverrideLatchesReviews")),
+}
 
 # FED_CFG — the federation configuration at small bounds (histories of 2
 #   events, 5 records in A's log): seconds, not the full run's minutes.
@@ -237,8 +262,8 @@ CLASS_FAULTS = {
         "IN relabel' = relabel",
         "RelabelAfterRefusalEscalates"),
     "override-past-the-review": (
-        "  /\\ accepted /\\ ~executed /\\ ~RelabelOpen /\\ ~GateFor(AppliedNow)",
-        "  /\\ accepted /\\ ~executed /\\ ~GateFor(AppliedNow)",
+        "  /\\ accepted /\\ ~executed /\\ ~RelabelOpen /\\ ~ReviewHold /\\ ~GateFor(AppliedNow)",
+        "  /\\ accepted /\\ ~executed /\\ ~ReviewHold /\\ ~GateFor(AppliedNow)",
         "NoExecutionWhileRelabelOpen"),
     "lowering-means-declared-only": (
         "  /\\ LET lowered == \\/ Rank[c] < Rank[declared]\n"
@@ -701,6 +726,44 @@ def test_tlc_catches_federation_faults(tmp_path, fault):
     mutant.parent.mkdir()
     mutant.write_text(FED_TEXT.replace(current, planted))
     result = run_tlc(mutant, FED_CFG, tmp_path)
+    assert any(f"{p} is violated" in result.stdout for p in props), result.stdout[-3000:]
+
+# ===========================================================================
+# SCENE 15 — A REVIEW HOLDS WHAT CANNOT BE UNDONE
+# Proves: the review hold (Layer 4, Overrides) is load-bearing in the model:
+# letting an override past an escalated signal, or not counting a
+# suppressed one as held, lets an irreversible decision execute past an
+# unresolved structural review.
+# ===========================================================================
+
+@needs_tlc
+def test_tlc_review_configuration_holds(tmp_path):
+    """
+    The review configuration itself passes.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+    Exit:    passes if TLC finds no violation
+    """
+    result = run_tlc(TLA_FILE, REVIEW_CFG, tmp_path)
+    assert "No error has been found" in result.stdout, result.stdout[-3000:]
+
+
+@needs_tlc
+@pytest.mark.parametrize("fault", list(REVIEW_FAULTS))
+def test_tlc_catches_review_hold_faults(tmp_path, fault):
+    """
+    Plant one review-hold fault; TLC must report a violation.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+             fault      a key of REVIEW_FAULTS
+    Exit:    passes if TLC reports one of the fault's properties violated
+    """
+    current, planted, props = REVIEW_FAULTS[fault]
+    assert current in TLA_TEXT, fault
+    mutant = tmp_path / "src" / TLA_FILE.name
+    mutant.parent.mkdir()
+    mutant.write_text(TLA_TEXT.replace(current, planted))
+    result = run_tlc(mutant, REVIEW_CFG, tmp_path)
     assert any(f"{p} is violated" in result.stdout for p in props), result.stdout[-3000:]
 
 # EXEUNT — end of file.

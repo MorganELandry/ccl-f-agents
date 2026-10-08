@@ -88,6 +88,7 @@ RED, GREEN, YELLOW, CYAN = "\033[31m", "\033[32m", "\033[33m", "\033[36m"
 HIGHLIGHT_EVENTS = {
     "CLASSIFICATION_REJECTED": YELLOW, "ESCALATION": YELLOW, "TRANSITION_REFUSED": RED,
     "EXECUTION_BLOCKED": RED, "GATE_OVERRIDE": RED, "OPEN_LOOP_IRREVERSIBLE_EXECUTION": RED,
+    "OVERRIDE_REFUSED": RED, "EXECUTION_REFUSED": RED,
     "EXECUTION_PERMITTED": GREEN, "ATTEMPTED_CLOSURE": YELLOW,
 }
 
@@ -141,6 +142,15 @@ def describe(entry) -> str:
             # !r prints the repr (with quotes), making the rationale stand out.
             lines.append(f"      override by {entry.actor}: {p['rationale']!r}")
         return "\n".join(lines)
+    # --- An override the gate would not accept -----------------------------
+    if entry.event == "OVERRIDE_REFUSED":
+        lines = [f"{p['decision']}: override by {entry.actor} refused "
+                 f"({p['rationale']!r})"]
+        lines += [f"      - {r}" for r in p["reasons"]]
+        return "\n".join(lines)
+    # --- A request refused before any gate was evaluated --------------------
+    if entry.event == "EXECUTION_REFUSED":
+        return f"{p['decision']}: {p['reason']}"
     # --- Irreversible execution that went ahead with loops still open -------
     if entry.event == "OPEN_LOOP_IRREVERSIBLE_EXECUTION":
         return f"{p['decision']}: locked {p['locked']}, still open {p['still_open']}"

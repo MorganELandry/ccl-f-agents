@@ -713,6 +713,9 @@ class Power(str, Enum):
       RECOMMEND   propose it; a recommendation changes no gate
       AUTHORIZE   give the Rule 4 acceptance (authorization, risk, rationale)
       EXECUTE     request execution at the gate
+      OVERRIDE    proceed past the gate's overridable failures (open-loop
+                  authorization); never held for a decision the same agent
+                  accepted
 
     The three are separate on purpose: holding one never implies another,
     so a recommendation handed on is never an authorization, and an agent
@@ -722,6 +725,7 @@ class Power(str, Enum):
     RECOMMEND = "recommend"
     AUTHORIZE = "authorize"
     EXECUTE = "execute"
+    OVERRIDE = "override"
 
 
 @dataclass(frozen=True)
@@ -793,6 +797,9 @@ class Decision:
                              to the decision id). With authority enforced,
                              only a root or a holder of delegable AUTHORIZE
                              over a scope may put a decision in it
+      requesters             every agent who has requested its execution;
+                             none of them, nor its accepting agent, may
+                             resolve a structural review holding it
       acceptance_grant       the grant that backed the Rule 4 acceptance
                              (None for a root, or with authority not
                              enforced); the acceptance counts only while
@@ -812,6 +819,7 @@ class Decision:
     ever_blocked: bool = False
     scope: str = ""
     acceptance_grant: Optional[str] = None
+    requesters: set = field(default_factory=set)
 
 
 # ===========================================================================

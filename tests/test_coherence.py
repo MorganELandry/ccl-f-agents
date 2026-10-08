@@ -204,7 +204,7 @@ def test_open_loops_factor(sv):
     evidence_close(sv, "u")
     decision(sv, "d", ["c", "u"])
     assert factors(sv)["open_loops"] == 0.5
-    sv.request_execution("d", "director", override_rationale="go")
+    sv.request_execution("d", "risk-officer", override_rationale="go")
     assert sv.signals["c"].state.value == "trajectory_lock"
     assert factors(sv)["open_loops"] == 0.5
 
