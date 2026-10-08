@@ -22,12 +22,13 @@ the review documents a coordination-model update (Rule 8: "the review
 produce a documented update to the coordination model — not a
 re-approval of existing practice").
 
-Settings the spec leaves open are the code's choices (D1, D5, D7):
-recurrence threshold 3, authority-closure threshold 1 ("exceeds", so two
-closures), and the "stable or improving" accuracy rule. The sender-discount
-threshold of 3 (D6) is now fixed by the spec itself (Credibility
-Discounting, AP-G threshold: "The threshold is three"). Tests that pin
-those numbers say so in their docstrings.
+Settings the spec leaves open are the code's choices (D1, D5): recurrence
+threshold 3 and authority-closure threshold 1 ("exceeds", so two
+closures). The sender-discount threshold of 3 (D6) is now fixed by the spec
+itself (Credibility Discounting, AP-G threshold: "The threshold is three"),
+and so is the "stable or improving" accuracy rule (D7; Layer 4, Execution
+Gates, operational definitions). Tests that pin those numbers say so in
+their docstrings.
 
 THE PLAYBILL
     Scene 1   test_recurrence_threshold_escalates_on_third_member   (impl. decision D1)
@@ -41,7 +42,7 @@ THE PLAYBILL
     Scene 9   test_framing_adopted_over_open_constraints_escalates
     Scene 10  test_credibility_discounting_escalates_only_for_accurate_senders
     Scene 11  test_sender_discount_recurrence_is_ap_g          (spec AP-G threshold; D6)
-    Scene 12  test_accuracy_rule               (impl. decision D7; parametrized, 8 runs)
+    Scene 12  test_accuracy_rule               (draft definition, D7; parametrized, 8 runs)
     Scene 13  test_escalated_signal_cannot_close
     Scene 14  test_resolution_requires_model_update
     Scene 15  test_resolution_recovers_signals_to_under_review
@@ -379,7 +380,8 @@ def test_sender_discount_recurrence_is_ap_g(sv):
 
 # ===========================================================================
 # SCENE 12 — WHAT "STABLE OR IMPROVING" MEANS HERE
-# Proves (implementation decision D7): the accuracy rule as coded.
+# Proves: the draft's definition of "stable or improving accuracy rate"
+# (Layer 4, Execution Gates, operational definitions; label D7).
 # ===========================================================================
 
 @pytest.mark.parametrize("record,expected", [
@@ -394,10 +396,12 @@ def test_sender_discount_recurrence_is_ap_g(sv):
 ])
 def test_accuracy_rule(sv, record, expected):
     """
-    Implementation-decision test (D7). The spec says "stable or improving
-    accuracy rate" without a formula; the code compares the later half of
-    the outcomes with the earlier half and also requires overall accuracy
-    of at least one half.
+    The draft's definition (D7): "two conditions together: the agent's
+    accuracy over the later half of their recorded outcomes is no lower
+    than over the earlier half ..., and their overall accuracy is at least
+    one half"; "A single recorded outcome is stable or improving if it was
+    correct and not if it was wrong"; no record means a discount is
+    unsupported.
 
     Enter:   sv         fixture
              record     outcomes recorded for agent "a", in order

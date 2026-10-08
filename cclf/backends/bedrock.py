@@ -91,7 +91,9 @@ def get_llm():
              raises ImportError if langchain-aws is not installed
 
     No credentials are checked here. If boto3 cannot find any, the error
-    appears when the model is first used.
+    appears when the model is first used (botocore NoCredentialsError),
+    and Advisor.propose() then falls back to its conservative proposal.
+    Checked October 2026 with langchain-aws 1.8.1 and boto3 1.43.109.
     """
     # PLAYERS IN THIS SCENE
     #   ChatBedrock   LangChain's Bedrock chat-model class (lazily imported)

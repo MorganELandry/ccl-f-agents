@@ -2033,9 +2033,10 @@ class Supervisor:
 
     def accuracy_stable_or_improving(self, agent: str) -> bool:
         """
-        Implementation decision D7: with at least two outcomes, the later half's
-        accuracy is at least the earlier half's, and overall accuracy is at
-        least one half. A single correct outcome also counts.
+        The draft's definition (the project label D7): with
+        at least two outcomes, the later half's accuracy is at least the
+        earlier half's, and overall accuracy is at least one half. A single
+        outcome counts if it was correct.
 
         Enter:   agent   the agent
         Exit:    True if their recorded accuracy is stable or improving;
@@ -2045,15 +2046,17 @@ class Supervisor:
         credibility discounting escalation condition (Layer 2, Escalation
         Conditions) and in AP.7 ("What to do"). Since October 2026 the spec
         gives it an operational definition (Layer 4, Execution Gates,
-        "Operational definitions"): "the agent's accuracy over their later
-        recorded outcomes is no lower than over their earlier ones. An agent
-        with no outcome record has no accuracy rate against which a discount
-        could be earned". The formula below is the IMPLEMENTATION DECISION
-        D7. Its later-half >= earlier-half test and its False for no record
-        match that definition; the extra condition (overall accuracy at
-        least one half) and the single-outcome rule are this project's own
-        additions, not in the spec's definition (so an agent whose later
-        accuracy holds steady below one half counts here as not stable).
+        "Operational definitions"): "two conditions together: the agent's
+        accuracy over the later half of their recorded outcomes is no lower
+        than over the earlier half (with an odd count, the later half takes
+        the extra outcome), and their overall accuracy is at least one
+        half." Also: "A single recorded outcome is stable or improving if it
+        was correct and not if it was wrong. An agent with no outcome record
+        has no accuracy rate against which a discount could be earned". The
+        overall-accuracy condition follows from AP.7: a characterization
+        that tracks genuinely poor signal quality is not a void. The formula
+        below implements that definition exactly; D7 began as this
+        project's choice and the draft adopted it in October 2026.
 
         Worked example: [False, True, True, True] -> early half [F, T] = 0.5,
         late half [T, T] = 1.0, overall 0.75 -> True.

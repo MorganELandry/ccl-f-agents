@@ -25,7 +25,19 @@ reproduction is recorded as direct measurement, and the first two closed
 signals are reopened (and, because the recurrence escalation names them,
 go straight to escalated). The decision to continue treatment is then
 blocked: every reporter is an interested party (AP-F captured channel),
-the recurrence group is unreviewed, and coherence is below threshold.
+the overdose loops are not evidence-closed, the recurrence group is
+unreviewed, no External Evidence Source supports the decision, and
+coherence is below threshold.
+
+READER'S NOTE — two kinds of rule label in the notes
+    A note may name two things. "Draft:" says where the draft tells this
+    part of the story (AECL's written assertions are the draft's Rule 3
+    case: an assertion standing in for stabilization). "Runtime:" says
+    which rule the runtime actually applies to the event. They can differ:
+    the draft files the letters under Rule 3, but what the runtime does
+    with a nominal classification resting on an assertion is Rule 2
+    ("Unvalidated conditions cannot be classified as nominal"), and its
+    log says so.
 
 THE PLAYBILL
     Scene 1  the architecture record           (AP.6: who could report)
@@ -107,15 +119,17 @@ for n in range(1, 7):
          "note": "AP.6: written to Kennestone, Yakima and East Texas Cancer Center"},
         {"op": "classify", "signal_id": f"overdose-{n}", "state": "nominal", "by": "aecl",
          "evidence_ids": [f"e-aecl-letter-{n}"],
-         "note": "Rule 3: an assertion is not validating evidence, so the runtime "
-                 "refuses nominal and records elevated uncertainty"},
+         "note": "Draft: Rule 3 case (AECL asserted safety in writing). Runtime: "
+                 "Rule 2 refuses nominal, since an assertion is not validating "
+                 "evidence, and records elevated uncertainty"},
         {"op": "open_review", "signal_id": f"overdose-{n}", "by": "aecl"},
         {"op": "attempt_closure", "signal_id": f"overdose-{n}", "by": "aecl",
          "referent": "technical", "evidence_ids": [f"e-aecl-letter-{n}"],
          "rationale": "no malfunction found",
-         "note": "Rule 3: assertion substituted for stabilization; typed authority "
-                 "closure. From the third incident the recurrence group is escalated "
-                 "and the closure is refused (Rule 7)."},
+         "note": "Draft: Rule 3 case (the assertion substituted for stabilization). "
+                 "Runtime: typed authority closure, since the letter is not EES "
+                 "evidence; from the third incident Rule 7 has escalated the "
+                 "recurrence group and the closure is refused"},
     ]
 
 # ===========================================================================
@@ -156,7 +170,8 @@ THERAC25 += [
      "rationale": "no malfunction found",
      "note": "Rule 4 acceptance by the manufacturer"},
     {"op": "request_execution", "decision_id": "continue-treatment", "by": "aecl",
-     "note": "blocked: captured channel (AP-F), open loops, unreviewed recurrence"},
+     "note": "blocked: captured channel (AP-F), loops not evidence-closed, "
+             "unreviewed recurrence, no External Evidence Source, low coherence"},
 ]
 
 # EXEUNT — end of file.
