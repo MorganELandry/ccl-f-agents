@@ -702,6 +702,59 @@ class Signal:
 
 
 # ===========================================================================
+# ACT II, SCENE 4b — AUTHORITY
+# Power, Grant: who may recommend, authorize or execute a decision
+# ===========================================================================
+
+class Power(str, Enum):
+    """
+    What an agent may do with a decision.
+
+      RECOMMEND   propose it; a recommendation changes no gate
+      AUTHORIZE   give the Rule 4 acceptance (authorization, risk, rationale)
+      EXECUTE     request execution at the gate
+
+    The three are separate on purpose: holding one never implies another,
+    so a recommendation handed on is never an authorization, and an agent
+    able to execute still needs someone else's (or its own, granted)
+    authorization.
+    """
+    RECOMMEND = "recommend"
+    AUTHORIZE = "authorize"
+    EXECUTE = "execute"
+
+
+@dataclass(frozen=True)
+class Grant:
+    """
+    One recorded grant of a power.
+
+    Fields:
+      grant_id     "G1", "G2", ... in order of granting
+      grantee      the agent receiving the power
+      power        the Power
+      scope        the decision scope it covers ("*" for every scope)
+      delegable    may the grantee grant this power on to others?
+      granted_by   who granted it (a root, or a holder of a delegable grant)
+      parent       the grant that let granted_by grant it; None if a root
+                   granted it. A grant is valid only while its parent is.
+      expires_at   wall-clock time (seconds since the epoch) after which it
+                   is void, or None for no expiry; never later than its
+                   parent's
+      at           logical clock time it was recorded
+    """
+    grant_id: str
+    grantee: str
+    power: Power
+    scope: str
+    delegable: bool
+    granted_by: str
+    parent: Optional[str]
+    expires_at: Optional[float]
+    at: int
+
+
+# ===========================================================================
 # ACT II, SCENE 5 — THE DECISION
 # Decision: an execution-class decision node awaiting its gate
 # ===========================================================================
@@ -735,6 +788,15 @@ class Decision:
                              Assignment)
       ever_blocked           True once any execution request on it was not
                              permitted; a lowering after that escalates
+      scope                  the authority scope its powers are granted for
+                             (a category such as "travel-booking"; defaults
+                             to the decision id). With authority enforced,
+                             only a root or a holder of delegable AUTHORIZE
+                             over a scope may put a decision in it
+      acceptance_grant       the grant that backed the Rule 4 acceptance
+                             (None for a root, or with authority not
+                             enforced); the acceptance counts only while
+                             that grant is in force
     """
     decision_id: str
     description: str
@@ -748,6 +810,8 @@ class Decision:
     reversal_path: Optional[str] = None
     reversal_evidence: tuple[str, ...] = ()
     ever_blocked: bool = False
+    scope: str = ""
+    acceptance_grant: Optional[str] = None
 
 
 # ===========================================================================

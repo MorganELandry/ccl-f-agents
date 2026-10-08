@@ -62,7 +62,7 @@ from .supervisor import GateResult, Settings, StructuralReview, Supervisor, Tran
 from .types import (
     Architecture, ClosureRecord, ClosureType, CommitmentState, Decision,
     EscalationCondition, Evidence, EvidenceKind, ExecutionClass, ExitRecord,
-    ExitType, LegalSubtype, OperationalState, Referent, Signal, SignalType,
+    ExitType, Grant, LegalSubtype, OperationalState, Power, Referent, Signal, SignalType,
 )
 
 
@@ -79,7 +79,7 @@ __all__ = [
     "Supervisor", "TransitionRefused", "Architecture", "ClosureRecord", "ClosureType",
     "CommitmentState", "Decision", "EscalationCondition", "Evidence", "EvidenceKind",
     "ExecutionClass", "ExitRecord", "ExitType", "LegalSubtype", "OperationalState",
-    "Referent", "Signal", "SignalType",
+    "Referent", "Signal", "SignalType", "Grant", "Power",
 ]
 
 # EXEUNT — end of file.

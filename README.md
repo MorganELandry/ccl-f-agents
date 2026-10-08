@@ -32,23 +32,36 @@ Organizations make catastrophic decisions while holding the information needed t
   - open off-envelope or containment signals resolved;
   - a coherence score at or above threshold.
 - **Requires Rule 4 acceptance.** Someone must accept authorization, risk and rationale, and this cannot be overridden. Neither can the block on a decision relabeled to a lower class after a refusal. Other failures can be overridden, but every override is logged with identity, rationale and time, and an irreversible override latches constraint and anomaly loops still under review into `trajectory_lock`.
+- **Grants authority instead of inferring it.** With authority roots configured (the principals an agent acts for), recommending, authorizing (Rule 4 acceptance) and executing are separate powers. Each must be granted by a root or by a chain of grants from one, and no grant can be wider than the grant it came from: not another power, a wider scope, a right to delegate that wasn't given, or a longer life. A grant is valid only while every grant above it is, and the gate checks authority when it is used. A handoff or recommendation is never an authorization, an override can't supply a missing power, and an acceptance made under a grant since revoked or expired authorizes nothing.
 - **Scores coherence** with the draft's five factors and provisional weights.
 - **Writes a hash-chained audit trail.** Editing, removing or reordering an entry breaks verification. Entries cut off the end are caught when checked against a head hash kept elsewhere.
 - **Keeps the model in an advisory role.** An optional model may *propose* a classification for a free-text report. The supervisor applies the same rules to its proposal as to anyone's, and model output never counts as evidence.
 
 Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## Across agents, with no central authority
+
+`cclf/federation.py` runs one supervisor per agent ("node"). Nodes share no state and no registry; they interact only through what they sign and publish.
+
+- **Signed logs.** Each node signs the head of its hash-chained log, which commits it to the whole history. A receiver checks the chain and the signature, refuses a log that rolls back, and treats two signed histories that differ as proof of equivocation.
+- **Identity.** Each node keeps its own trust list of public keys. A name already recognized can't be taken over by another key.
+- **Remote loops.** A decision may rest on a loop at another node. The receiver keeps a local mirror, open until it accepts the peer's closure. It accepts only after recomputing from the peer's log that the closure is a chain-sound evidence closure, following any chain into third nodes' own logs. A closure the peer reopens, or one from a peer caught equivocating, is withdrawn.
+- **Evidence origins.** Evidence carries an attestation signed by its producer and bound to the node it was given to, with a content hash; a formal proof can be re-checked by the receiver. Producers and evaluated processes sign lineage statements, and evidence counts as independent only if the two share nothing. That last test is attested, not proven: no signature can prove two lineages share no ancestor.
+- **Authority across nodes.** A power reaches a node only as a signed grant, addressed to that node, from someone who holds it there delegably. Revocations are signed too. A revocation binds only once it arrives, so grants can carry an expiry that bounds that window.
+- **An outside audit.** `audit_federation()` checks every published log and every cross-reference, and catches equivocation that no single node saw.
+
 ## Formal verification
 
 The state machine and the closure and Layer 0 rules are also written as formal models and machine-checked ([verification/](verification/README.md)):
 
-- **TLA+:** TLC explores every reachable state of a bounded model of the Layer 4 state machine, in two configurations (31.5 million states for the signal lifecycle, 25.7 million for execution classes). It confirms the draft's four blocked transitions, the recovery and re-entry rules, the append-only audit log, Rule 4, the logged override, and that a decision can't be relabeled past the irreversible gate.
-- **Alloy:** the Alloy Analyzer checks closure typing and the Layer 0 voids. It found one gap in the runtime, a successor who is also the steward passing AP.1b, which is now fixed.
+- **TLA+, one supervisor:** TLC explores every reachable state of a bounded model of the Layer 4 state machine, in three configurations (45.7 million states for the signal lifecycle, 37.1 million for execution classes, 12.4 million for Closure Chain depth). It confirms the draft's four blocked transitions, the recovery and re-entry rules, the append-only audit log, Rule 4, the logged override, Closure Chain soundness, and that a decision can't be relabeled past the irreversible gate.
+- **TLA+, a federation:** a second model has three nodes as separate machines over an adversarial network, with one node free to fork and lie (23.1 million states). It confirms that a mirror closes only on a closure grounded in the owners' own logs, that an equivocator is never relied on and an honest node never accused, that views never roll back or switch histories, and that every step changes at most one node's state.
+- **Alloy:** the Alloy Analyzer checks closure typing, Closure Chain, the decision-level evidence rules and the Layer 0 voids. It found one gap in the runtime, a successor who is also the steward passing AP.1b, which is now fixed.
 
-A test ties both models to the Python code so they cannot drift apart.
+Tests tie the models to the Python code so they cannot drift apart, and planted faults show each property can fail.
 
 ```bash
-bash verification/run.sh                 # needs Java 17+; about 30 minutes
+bash verification/run.sh                 # needs Java 17+; about 2 hours
 ```
 
 ## Scenarios
@@ -66,7 +79,7 @@ pip install -r requirements.txt
 python run_demo.py challenger            # also: therac25, mcas
 python run_demo.py mcas --quiet          # summary only
 python run_demo.py therac25 --audit therac25_audit.json --no-obs
-pytest                                   # 328 tests, no API key needed (8 of them need Java)
+pytest                                   # 814 tests, no API key needed (28 of them need Java)
 ```
 
 The scenarios make no model calls, so the demo needs no API key.
@@ -110,13 +123,15 @@ Suggested reading order: `cclf/types.py` → `cclf/statemachine.py` → `cclf/au
 
 ```
 cclf/            types, state machine, audit trail, supervisor (rule engine),
+                 federation (signed logs, identity, remote closure, grants),
                  advisor (proposes only), LangGraph pipeline, model backends,
                  observability
 scenarios/       challenger.py, therac25.py, mcas.py
 evals/           closure_pressure.py
 tests/           state machine, closure typing, classification, escalation,
                  exits, gates, gate design, execution class, coherence, audit,
-                 graph, observability, scenarios, eval harness, formal models
+                 authority, delegation, federation, graph, observability,
+                 scenarios, eval harness, formal models
 docs/            ARCHITECTURE.md, DECISIONS.md
 verification/    TLA+ and Alloy models, run.sh
 observability/   OpenTelemetry setup (Datadog, Dynatrace)

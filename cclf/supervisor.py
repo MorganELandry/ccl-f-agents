@@ -90,6 +90,8 @@ THE PLAYBILL (what happens in this file)
                   effective_class, reclassify_decision
                                            Execution Class Assignment
         Scene 2   link_signal              attach a signal to a decision
+        Scene 2b  holds, grant, revoke,    who may recommend, authorize, execute;
+                  recommend                chains of grants, revocation, expiry
         Scene 3   accept_decision          Rule 4: a single named accepting agent
         Scene 4   _decision_signals        the decision's known signals
         Scene 5   _classification_stable   D8: has the classification settled?
@@ -148,15 +150,16 @@ READER'S NOTE — Optional and Iterable (from the typing module)
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from .audit import AuditTrail
 from .statemachine import check_transition, exit_allowed, reentry_allowed
 from .types import (
     Architecture, ClosureRecord, ClosureType, CommitmentState as S, Decision,
     EES_ELIGIBLE_KINDS, EscalationCondition as E, Evidence, ExecutionClass,
-    ExitRecord, ExitType, LegalSubtype, OperationalState as O, Referent,
+    ExitRecord, ExitType, Grant, LegalSubtype, OperationalState as O, Power, Referent,
     Signal, SignalType, CLOSED_STATES, RESOLVING_EXITS,
 )
 
@@ -301,6 +304,13 @@ class Settings:
     sender_discount_threshold: int = DEFAULT_SENDER_DISCOUNT_THRESHOLD
     coherence_threshold: float = DEFAULT_COHERENCE_THRESHOLD
     min_evidence_closure_ratio: float = DEFAULT_MIN_EVIDENCE_CLOSURE_RATIO
+    # authority_roots: agents who hold every Power over every scope and may
+    #   delegate it (the principals: an organization's officers, the user an
+    #   assistant acts for). Empty means authority is not enforced, as
+    #   before. Set, every recommendation, acceptance and execution request
+    #   must rest on a root or on a chain of grants from one
+    #   (IMPLEMENTATION DECISION; see ACT VIII, Scene 2b).
+    authority_roots: frozenset = frozenset()
 
 
 # ===========================================================================
@@ -435,13 +445,17 @@ class Supervisor:
     # =======================================================================
 
     def __init__(self, settings: Optional[Settings] = None,
-                 architecture: Optional[Architecture] = None) -> None:
+                 architecture: Optional[Architecture] = None,
+                 now: Optional[Callable[[], float]] = None) -> None:
         """
         Create an empty supervisor.
 
         Enter:   settings       thresholds to use (default: Settings())
                  architecture   the registered Layer 0 architecture
                                 (default: an empty Architecture())
+                 now            the wall clock grant expiry is judged by,
+                                in seconds since the epoch (default:
+                                time.time; tests pass their own)
         Exit:    a Supervisor with no signals, evidence, decisions or reviews
 
         Attributes it sets:
@@ -461,6 +475,9 @@ class Supervisor:
                                   the agent's record; only these count toward
                                   AP-G (D6)
             sender_discount_void  agents now under AP-G (Sender Discount)
+            grants                every Grant of a power, in order (ACT VIII,
+                                  Scene 2b)
+            revoked               grant id -> (revoking agent, clock time)
             clock                 the logical clock (see the module READER'S NOTE)
             _closure_seq          counter for closure record ids "C1", "C2", ...
         """
@@ -476,6 +493,9 @@ class Supervisor:
         self.signals: dict[str, Signal] = {}
         self.evidence: dict[str, Evidence] = {}
         self.decisions: dict[str, Decision] = {}
+        self.grants: list[Grant] = []
+        self.revoked: dict[str, tuple[str, int]] = {}
+        self.now = now or time.time
         self.reviews: list[StructuralReview] = []
         self.reviewed_groups: set[str] = set()
         self.accuracy: dict[str, list[bool]] = {}      # agent -> signal outcomes
@@ -960,9 +980,14 @@ class Supervisor:
         sig.registered_at = at
         self.signals[signal_id] = sig
         # --- Enter the state machine ---------------------------------------
+        # The referent, process under evaluation and evidence present at
+        # registration are logged so that another agent can recompute this
+        # signal's closure type from the log alone (cclf/federation.py).
         self._move(sig, S.REGISTERED, registered_by, signal_type=signal_type,
                    description=description, steward=steward, successor=successor,
-                   recurrence_group=recurrence_group, failure_mode=failure_mode)
+                   recurrence_group=recurrence_group, failure_mode=failure_mode,
+                   referent=referent, evaluated_process=evaluated_process,
+                   evidence_at_registration=sorted(sig.evidence_at_registration))
         # --- Rule 7: does this signal push its group over the threshold? ---
         self._check_recurrence(sig, registered_by)
         return sig
@@ -1291,7 +1316,7 @@ class Supervisor:
         self._move(sig, target, by, closure_type=ctype, record=record.record_id,
                    qualifying_evidence=qualifying, cited_evidence=list(evidence_ids),
                    rationale=rationale, flagged=ctype != ClosureType.EVIDENCE,
-                   chain_sound=chain_ok, broken_links=broken)
+                   chain_sound=chain_ok, broken_links=broken, closer_referent=referent)
         sig.closures.append(record)
 
         # --- Escalation: role-switch closure on a constraint signal --------
@@ -2189,7 +2214,8 @@ class Supervisor:
     def register_decision(self, decision_id: str, description: str,
                           execution_class: ExecutionClass, signal_ids: Iterable[str],
                           by: str, reversal_path: Optional[str] = None,
-                          reversal_evidence_ids: Iterable[str] = ()) -> Decision:
+                          reversal_evidence_ids: Iterable[str] = (),
+                          scope: Optional[str] = None) -> Decision:
         """
         Register an execution-class decision node.
 
@@ -2202,6 +2228,13 @@ class Supervisor:
                  reversal_path     how its effects could be undone (needed for
                                    a declared class below irreversible to apply)
                  reversal_evidence_ids  evidence that the path was tested
+                 scope             the authority scope (Scene 2b); default:
+                                   the decision id. With authority
+                                   enforced, a scope other than the default
+                                   needs `by` to be a root or to hold
+                                   AUTHORIZE over it delegably (else
+                                   SCOPE_REFUSED and TransitionRefused);
+                                   see also assign_scope()
         Exit:    the new Decision (not yet accepted or executed); logs
                  DECISION_REGISTERED with both the declared and the applied
                  class. A used decision id or an unknown evidence id is
@@ -2224,14 +2257,20 @@ class Supervisor:
         self._require_actor(by)
         if decision_id in self.decisions:
             raise TransitionRefused(f"decision {decision_id!r} already registered")
+        # --- Who may put a decision in a scope (Scene 2b) -----------------
+        # A scope decides whose authority applies, so choosing it is itself
+        # an act of authority: otherwise anyone could label a production
+        # launch "sandbox" and approve it with sandbox powers.
+        if scope is not None and scope != decision_id:
+            self._require_scope_owner(scope, by, decision_id)
         reversal_evidence_ids = tuple(reversal_evidence_ids)
         self._check_evidence_ids(reversal_evidence_ids, "reversal evidence")
         self._tick()
         d = Decision(decision_id, description, execution_class, list(signal_ids),
                      class_setters=(by,), reversal_path=reversal_path,
-                     reversal_evidence=reversal_evidence_ids)
+                     reversal_evidence=reversal_evidence_ids, scope=scope or decision_id)
         self.decisions[decision_id] = d
-        self._log("DECISION_REGISTERED", by, decision=decision_id,
+        self._log("DECISION_REGISTERED", by, decision=decision_id, scope=d.scope,
                   execution_class=execution_class, signals=d.signal_ids,
                   reversal_path=reversal_path, reversal_evidence=list(reversal_evidence_ids),
                   applied_class=self._applied_class(d))
@@ -2408,6 +2447,273 @@ class Supervisor:
         self._check_authority_count(d, by)
 
     # =======================================================================
+    # ACT VIII, SCENE 2b — WHO MAY RECOMMEND, AUTHORIZE, EXECUTE
+    # Authority is granted, never inferred: not from a handoff, not from a
+    # recommendation, not from being the next agent in a pipeline.
+    # =======================================================================
+
+    @property
+    def authority_enforced(self) -> bool:
+        """
+        Are powers checked? Only once Settings.authority_roots names someone.
+
+        Enter:   (none)
+        Exit:    True if authority roots are set
+        """
+        return bool(self.settings.authority_roots)
+
+    def _grant_valid(self, g: Grant, now: float) -> bool:
+        """
+        Is this grant in force: not revoked, not expired, and every grant
+        above it in its chain in force too?
+
+        Enter:   g     the Grant
+                 now   the wall-clock time to judge expiry at
+        Exit:    True if the whole chain from a root down to g holds
+        """
+        # PLAYERS IN THIS SCENE
+        #   parent   the grant g was derived from
+
+        if g.grant_id in self.revoked:
+            return False
+        if g.expires_at is not None and now >= g.expires_at:
+            return False
+        if g.parent is None:
+            return g.granted_by in self.settings.authority_roots
+        parent = self._grant(g.parent)
+        return self._grant_valid(parent, now)
+
+    def _grant(self, grant_id: str) -> Grant:
+        """
+        Look a grant up by id.
+
+        Enter:   grant_id   "G1", ...
+        Exit:    the Grant; raises TransitionRefused if unknown
+        """
+        for g in self.grants:
+            if g.grant_id == grant_id:
+                return g
+        raise TransitionRefused(f"unknown grant {grant_id!r}")
+
+    def _backing(self, agent: str, power: Power, scope: str, delegable: bool = False
+                 ) -> Optional[Grant]:
+        """
+        The grant in force that gives this agent this power over this scope.
+
+        Enter:   agent, power, scope   as in holds()
+                 delegable             also require the right to grant it on
+        Exit:    the first such Grant, or None
+        """
+        # PLAYERS IN THIS SCENE
+        #   now   the wall clock, read once
+
+        now = self.now()
+        return next((g for g in self.grants
+                     if g.grantee == agent and g.power == Power(power)
+                     and g.scope in (scope, "*") and (g.delegable or not delegable)
+                     and self._grant_valid(g, now)), None)
+
+    def holds(self, agent: str, power: Power, scope: str, delegable: bool = False) -> bool:
+        """
+        Does this agent hold this power over this scope, right now?
+
+        Enter:   agent       the agent
+                 power       a Power
+                 scope       a decision scope
+                 delegable   also require the right to grant it on
+        Exit:    True if the agent is a root, or holds a grant in force
+                 (scope equal or "*"; delegable if asked; not revoked or
+                 expired, and nor is any grant above it). Always True when
+                 authority is not enforced.
+
+        IMPLEMENTATION DECISION: Rule 4 says a single agent must "explicitly
+        accept authorization"; the draft does not say who may. Here the
+        answer is: an authority root, or whoever a root's chain of grants
+        in force reaches. A recommendation is never an authorization: the
+        powers are separate, and holding one implies no other.
+        """
+        if not self.authority_enforced or agent in self.settings.authority_roots:
+            return True
+        return self._backing(agent, power, scope, delegable) is not None
+
+    def _refuse_power(self, event: str, by: str, power: Power, scope: str, what: str,
+                      **payload) -> None:
+        """
+        Log a refusal for want of a power, then raise.
+
+        Enter:   event     the event name to log (e.g. ACCEPTANCE_REFUSED)
+                 by        the agent who lacked it
+                 power     the Power needed
+                 scope     the scope
+                 what      what was attempted, for the message
+                 payload   extra details for the log
+        Exit:    never returns; raises TransitionRefused
+        """
+        reason = (f"{by} does not hold {Power(power).value} over {scope!r}: "
+                  f"{what} refused (authority is granted, never inferred)")
+        self._tick()
+        self._log(event, by, power=Power(power), scope=scope, reason=reason, **payload)
+        raise TransitionRefused(reason)
+
+    def grant(self, grantee: str, power: Power, scope: str, by: str,
+              delegable: bool = False, expires_at: Optional[float] = None) -> Grant:
+        """
+        Grant a power. Only someone who holds it, delegably, can grant it,
+        and never for longer than they hold it.
+
+        Enter:   grantee      the agent receiving the power
+                 power        a Power
+                 scope        the scope it covers ("*" for all)
+                 by           the granting agent
+                 delegable    may the grantee grant it on?
+                 expires_at   when it lapses (wall clock), or None
+        Exit:    the Grant, linked to the grant that backs `by` (its
+                 parent); logs AUTHORITY_GRANTED. Refused, with
+                 GRANT_REFUSED logged and TransitionRefused raised, if `by`
+                 does not hold the power delegably over that scope (for "*":
+                 a root or a "*" grant), or if the new grant would outlive
+                 its parent. Nothing is granted then.
+
+        Delegation can only pass on what the delegator holds: no grant can
+        exceed its grantor's power, scope, right to delegate or lifetime.
+        And because a grant is valid only while its parent is, revoking or
+        expiring any link voids everything below it.
+        """
+        # PLAYERS IN THIS SCENE
+        #   parent   the grant in force that lets `by` grant this (None: root)
+        #   g        the new Grant
+
+        self._require_actor(by)
+        self._require_actor(grantee)
+        power = Power(power)
+        if not self.holds(by, power, scope, delegable=True):
+            self._refuse_power("GRANT_REFUSED", by, power, scope, f"granting it to {grantee}",
+                               grantee=grantee, delegable=delegable, expires_at=expires_at)
+        root = not self.authority_enforced or by in self.settings.authority_roots
+        parent = None if root else self._backing(by, power, scope, delegable=True)
+        if parent is not None and parent.expires_at is not None and (
+                expires_at is None or expires_at > parent.expires_at):
+            reason = (f"{by}'s authority ({parent.grant_id}) lapses at {parent.expires_at}; "
+                      f"a grant to {grantee} cannot outlive it (requested: "
+                      f"{'no expiry' if expires_at is None else expires_at})")
+            self._tick()
+            self._log("GRANT_REFUSED", by, power=power, scope=scope, reason=reason,
+                      grantee=grantee, delegable=delegable, expires_at=expires_at)
+            raise TransitionRefused(reason)
+        self._tick()
+        g = Grant(f"G{len(self.grants) + 1}", grantee, power, scope, delegable, by,
+                  parent.grant_id if parent else None, expires_at, self.clock)
+        self.grants.append(g)
+        self._log("AUTHORITY_GRANTED", by, grant=g.grant_id, grantee=grantee, power=power,
+                  scope=scope, delegable=delegable, parent=g.parent, expires_at=expires_at)
+        return g
+
+    def revoke(self, grant_id: str, by: str, reason: str) -> list[str]:
+        """
+        Withdraw a grant, and with it every grant derived from it.
+
+        Enter:   grant_id   the grant
+                 by         its grantor, any grantor above it in its chain,
+                            or a root
+                 reason     why
+        Exit:    the ids of the grants this voids (it and its descendants);
+                 logs AUTHORITY_REVOKED. Anyone else is refused
+                 (REVOCATION_REFUSED, TransitionRefused).
+
+        Takes effect for every later check: an acceptance made under the
+        revoked authority no longer lets the decision execute (see
+        request_execution).
+        """
+        # PLAYERS IN THIS SCENE
+        #   g         the grant
+        #   chain     grantors from g up to its root
+        #   up        walking up the chain
+        #   voided    g and every grant whose chain passes through it
+
+        self._require_actor(by)
+        g = self._grant(grant_id)
+        chain, up = [g.granted_by], g
+        while up.parent is not None:
+            up = self._grant(up.parent)
+            chain.append(up.granted_by)
+        if by not in chain and by not in self.settings.authority_roots:
+            why = f"{by} is not in the chain of grantors for {grant_id} ({chain})"
+            self._tick()
+            self._log("REVOCATION_REFUSED", by, grant=grant_id, reason=why)
+            raise TransitionRefused(why)
+        voided = [x.grant_id for x in self.grants if self._descends(x, grant_id)]
+        self._tick()
+        self.revoked.setdefault(grant_id, (by, self.clock))
+        self._log("AUTHORITY_REVOKED", by, grant=grant_id, reason=reason, voids=voided)
+        return voided
+
+    def _descends(self, g: Grant, ancestor_id: str) -> bool:
+        """
+        Is ancestor_id this grant, or above it in its chain?
+
+        Enter:   g             a Grant
+                 ancestor_id   a grant id
+        Exit:    True or False
+        """
+        while True:
+            if g.grant_id == ancestor_id:
+                return True
+            if g.parent is None:
+                return False
+            g = self._grant(g.parent)
+
+    def _require_scope_owner(self, scope: str, by: str, decision_id: str) -> None:
+        """
+        Refuse unless `by` may put decisions in this scope: a root, or a
+        holder of delegable AUTHORIZE over it.
+
+        Enter:   scope, by, decision_id
+        Exit:    None; or logs SCOPE_REFUSED and raises TransitionRefused
+        """
+        if not self.holds(by, Power.AUTHORIZE, scope, delegable=True):
+            self._refuse_power("SCOPE_REFUSED", by, Power.AUTHORIZE, scope,
+                               f"putting {decision_id} in scope {scope!r}", decision=decision_id)
+
+    def assign_scope(self, decision_id: str, scope: str, by: str) -> None:
+        """
+        Put a decision in an authority scope.
+
+        Enter:   decision_id   the decision (not yet accepted)
+                 scope         the scope
+                 by            a root, or a holder of delegable AUTHORIZE over
+                               the scope
+        Exit:    None; logs SCOPE_ASSIGNED. Refused once the decision is
+                 accepted (the acceptance was given for its old scope).
+        """
+        self._require_actor(by)
+        d = self._decision(decision_id)
+        if d.accepted_by:
+            raise TransitionRefused(f"{decision_id} is already accepted; its scope is fixed")
+        self._require_scope_owner(scope, by, decision_id)
+        self._tick()
+        previous, d.scope = d.scope, scope
+        self._log("SCOPE_ASSIGNED", by, decision=decision_id, scope=scope, previous=previous)
+
+    def recommend(self, decision_id: str, by: str, rationale: str) -> None:
+        """
+        Record a recommendation. It changes no gate and authorizes nothing.
+
+        Enter:   decision_id   the decision
+                 by            the recommending agent
+                 rationale     why
+        Exit:    None; logs DECISION_RECOMMENDED. Refused (and logged as
+                 RECOMMENDATION_REFUSED) if authority is enforced and `by`
+                 does not hold RECOMMEND over the decision's scope.
+        """
+        self._require_actor(by)
+        d = self._decision(decision_id)
+        if not self.holds(by, Power.RECOMMEND, d.scope):
+            self._refuse_power("RECOMMENDATION_REFUSED", by, Power.RECOMMEND, d.scope,
+                               "recommending", decision=decision_id)
+        self._tick()
+        self._log("DECISION_RECOMMENDED", by, decision=decision_id, rationale=rationale)
+
+    # =======================================================================
     # ACT VIII, SCENE 3 — SOMEONE MUST OWN IT
     # Rule 4: a single named agent accepts the decision.
     # =======================================================================
@@ -2425,7 +2731,9 @@ class Supervisor:
                                Evidence Source at the irreversible gate
         Exit:    None; the decision records `by`, the rationale and the
                  cited evidence; an unknown evidence id is refused and
-                 nothing changes
+                 nothing changes. With authority enforced, an agent
+                 without AUTHORIZE over the decision's scope is refused
+                 (ACCEPTANCE_REFUSED) and nothing changes
 
         Spec: Rule 4, Decisions Have Living Ownership: "Before any execution-class decision,
         a single agent must explicitly accept authorization, risk
@@ -2445,6 +2753,12 @@ class Supervisor:
         if not rationale:
             raise TransitionRefused("Rule 4: acceptance requires rationale documentation")
         d = self._decision(decision_id)
+        # --- Only a holder of AUTHORIZE can accept (Scene 2b) --------------
+        # A recommendation, a handoff, or a request to execute is not an
+        # authorization, whoever it came from.
+        if not self.holds(by, Power.AUTHORIZE, d.scope):
+            self._refuse_power("ACCEPTANCE_REFUSED", by, Power.AUTHORIZE, d.scope,
+                               "Rule 4 acceptance", decision=decision_id, rationale=rationale)
         evidence_ids = tuple(evidence_ids)
         unknown = [e for e in evidence_ids if e not in self.evidence]
         if unknown:
@@ -2453,8 +2767,13 @@ class Supervisor:
         # `a, b, c = x, y, z` assigns all three fields in one line.
         d.accepted_by, d.acceptance_rationale, d.acceptance_evidence = (
             by, rationale, evidence_ids)
+        # The grant that backs this acceptance; it must stay in force.
+        backing = (self._backing(by, Power.AUTHORIZE, d.scope)
+                   if self.authority_enforced and by not in self.settings.authority_roots
+                   else None)
+        d.acceptance_grant = backing.grant_id if backing else None
         self._log("DECISION_ACCEPTED", by, decision=decision_id, rationale=rationale,
-                  evidence=list(evidence_ids))
+                  evidence=list(evidence_ids), grant=d.acceptance_grant)
 
     # =======================================================================
     # ACT VIII, SCENE 4 — THE DECISION'S CAST LIST
@@ -2949,6 +3268,17 @@ class Supervisor:
         # --- A decision executes once --------------------------------------
         if d.executed:
             raise TransitionRefused(f"decision {decision_id} has already executed")
+        # --- Only a holder of EXECUTE may ask (never overridable) ----------
+        # Scene 2b. Checked before everything else, and override_rationale
+        # is ignored: an override cannot supply a power nobody granted.
+        if not self.holds(by, Power.EXECUTE, d.scope):
+            d.ever_blocked = True
+            reason = (f"{by} does not hold execute over {d.scope!r} "
+                      "(authority is granted, never inferred)")
+            self._log("EXECUTION_REFUSED", by, decision=decision_id, reason=reason,
+                      declared_class=d.execution_class, execution_class=applied)
+            return GateResult(decision_id, applied, False, False, False, [reason], score,
+                              declared_class=d.execution_class)
         # --- Rule 4: someone must have accepted it (never overridable) -----
         # Checked first, and returned at once: no other gate is evaluated
         # and override_rationale is ignored.
@@ -2960,6 +3290,22 @@ class Supervisor:
             return GateResult(decision_id, applied, False, False, False,
                               ["Rule 4: no named agent has accepted authorization, risk "
                                "acceptance and rationale"], score,
+                              declared_class=d.execution_class)
+        # --- The acceptance must still be backed (never overridable) -------
+        # Scene 2b. Authority is checked when it is used, not only when it
+        # was given: an acceptance made under a grant since revoked or
+        # expired no longer authorizes anything, even if the acceptor has
+        # been given authority again since (that calls for a new acceptance).
+        if self.authority_enforced and d.accepted_by not in self.settings.authority_roots and (
+                d.acceptance_grant is None
+                or not self._grant_valid(self._grant(d.acceptance_grant), self.now())):
+            d.ever_blocked = True
+            reason = (f"Rule 4: {d.accepted_by}'s acceptance is no longer backed by "
+                      f"authority in force over {d.scope!r} (revoked or expired); "
+                      "a new acceptance is needed")
+            self._log("EXECUTION_REFUSED", by, decision=decision_id, reason=reason,
+                      declared_class=d.execution_class, execution_class=applied)
+            return GateResult(decision_id, applied, False, False, False, [reason], score,
                               declared_class=d.execution_class)
         # --- Relabeled after a refusal: blocked at every class -------------
         # Never overridable: "Until that review is resolved, the decision

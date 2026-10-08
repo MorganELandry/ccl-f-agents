@@ -75,7 +75,9 @@ Spans carry only the scenario name and the event's `op`. Metrics carry closure t
 API keys come from environment variables. Use a secret manager or managed identity (Azure) or IAM role (AWS), and rotate keys on a schedule.
 
 ### 6. Identity (medium)
-The runtime requires an actor name on every state-changing operation and logs it, but it does not authenticate that name. A deployment would bind the actor to an authenticated identity before the call reaches the supervisor, especially for overrides and Rule 4 acceptance.
+The runtime requires an actor name on every state-changing operation and logs it, but within one supervisor it does not authenticate that name. A deployment would bind the actor to an authenticated identity before the call reaches the supervisor, especially for overrides, grants and Rule 4 acceptance. With authority roots set, the runtime does check that the named agent holds the power it uses (recommend, authorize, execute), so binding names to identities is what makes those checks meaningful.
+
+Across agents (`cclf/federation.py`), identity is by Ed25519 key: logs, evidence attestations, lineage statements, grants and revocations are signed and verified. Private keys then need the same care as API keys: a hardware or managed key store, rotation, and a way to retire a compromised key (the runtime refuses to rebind a recognized name to a new key, so rotation is a deliberate trust-list change).
 
 ---
 
@@ -92,6 +94,8 @@ The runtime requires an actor name on every state-changing operation and logs it
 - [ ] Audit trail written to an access-controlled, access-logged store
 - [ ] Telemetry kept in-network, BAA-covered, or disabled
 - [ ] Actor names bound to authenticated identities
+- [ ] Authority roots configured, and grants reviewed, before agents act for anyone
+- [ ] Federation keys held in a managed key store, with a rotation plan
 - [ ] Credentials in a secret manager
 - [ ] Security review and Privacy Officer sign-off
 

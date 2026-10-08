@@ -2,6 +2,7 @@
 langgraph>=0.2.0
 langchain-core>=0.2.0
 pytest>=7.0.0
+cryptography>=42.0.0          # Ed25519 signatures for cclf/federation.py
 
 # LLM backends — install the one(s) you need
 langchain-openai>=0.1.0       # CCLF_LLM_BACKEND=openai (default)

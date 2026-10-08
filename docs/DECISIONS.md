@@ -82,6 +82,37 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
   - The TLA+ model covers execution classes in its own configuration (`verification/tla/Classes.cfg`), with the reversal evidence's independence abstracted to a yes/no.
 - **Duplicate IDs are refused** for signals, evidence and decisions, so an accepted record cannot be silently replaced.
 
+### Authority
+
+The draft's Rule 4 asks that a single agent "explicitly accept authorization"; it does not say who may. These choices are this project's, not the draft's.
+
+- **Three separate powers:** recommend, authorize, execute. Holding one never implies another, so a recommendation handed on is never an authorization.
+- **Roots are configured, not inferred.** `Settings.authority_roots` names the principals. With none set, authority isn't enforced (any agent may accept), which keeps earlier behavior. Whether the draft should require a root for every irreversible decision is an open question for the draft.
+- **Delegation only attenuates.** A grant needs its grantor to hold the same power, delegably, over that scope; `"*"` only from a root or a `"*"` grant; its expiry no later than its parent's (a request to outlive it is refused, not shortened).
+- **Validity is a whole-chain property**, computed when needed: revoking or expiring any grant voids everything below it. One parent is recorded per grant (the first valid one found); a grantor with two backing grants loses this one if that parent goes, even if the other stands.
+- **Who may revoke:** the grantor, anyone above it in its chain, or a root. Not the grantee, nor anyone below.
+- **Checked at use.** Execution requires the executor's EXECUTE in force at the request, and the grant that backed the acceptance still in force. A later, separate grant to the acceptor does not revive an acceptance whose backing grant lapsed: a new acceptance is needed. Neither block can be overridden: an override cannot supply a power nobody granted.
+- **Choosing a scope is an act of authority.** A decision's scope decides whose powers apply, so only a root or a holder of delegable AUTHORIZE over a scope can put a decision in it (at registration, or with `assign_scope()` before acceptance). Otherwise a decision's scope is its own id, which only roots and `"*"` grants cover.
+- **Expiry is wall-clock time** (seconds since the epoch, `Supervisor(now=...)`), because grants cross nodes whose logical clocks differ.
+- **Not covered:** revocation does not undo an execution that already happened; reclassifying a decision needs no power.
+
+### Federation
+
+- **No transitive trust.** A node accepts a remote closure only from the owner's own log; a peer's mirror of a third node's loop is checked against that third node's log, as this node last verified it.
+- **Origins are attested; independence is declared.** A producer's attestation proves who produced the evidence and what it says (by hash). Independence is the producer's and the evaluated process's signed lineage statements sharing no label; a missing statement means independence can't be checked, and the closure is rejected.
+- **Attestations are bound to the relaying node**, so one given to node C can't be cited from node B's log.
+- **A peer's log is replayed, not read.** `parse_log()` accepts only what an honest Supervisor could have written: one registration per signal and before anything else about it, every transition from the signal's current state and in the Layer 4 table, exits only from open states, re-entry only after an exit, a mirror declared in the entry right after its registration (never relabeled later), unique evidence ids, and complete fields. A log that fails is refused. Tests replay every scenario and 100 random honest histories to confirm honest logs always pass.
+- **Equivocation and misbehavior are permanent.** After a fork, or a validly signed log that fails `parse_log()`, the peer's logs are refused and every closure resting on it is withdrawn. A shorter log that diverges from one seen before is a fork, not just a rollback.
+- **The mirrored loop must stay the same loop.** A remote closure is judged against what the mirror was registered as (signal type, referent, evaluated process), and a mirror in a chain against what the peer mirrored.
+- **A relaying node is never the producer.** Evidence a peer attests itself can't close another node's mirror. If a local rule still turns an import into a non-evidence closure, the mirror is reopened at once, so a rejected acceptance never leaves it closed.
+- **Fail closed.** Any error while re-checking an accepted closure withdraws it.
+- **Grants carry a random nonce**, and a node refuses any grant it has received before, so a revoked grant can't be replayed into force.
+- **Lineage statements carry a version**; an older one can't replace a newer one. A new statement or a newly recognized key re-checks every accepted closure.
+- **A root's key is recognized deliberately** (`principal=True`), since whoever holds it can sign grants as the root. Names can't contain `/`, so mirror ids can't collide.
+- **Nodes share nothing in memory.** Published and received logs are deep copies.
+- **The auditor checks structure, not origins.** It confirms logs, heads and cited closures; each accepting node checked attestations and lineage itself. A citation must carry the peer's signature on the cited head: without one the citing node is blamed, never the peer. Two segments from one node that disagree are equivocation. A malformed citation is reported, not raised.
+- **Found by an independent adversarial review.** A separate reviewer, not shown the tests, wrote 27 attacks; 18 found weaknesses, all fixed above. Its tests are kept in `tests/test_adversarial.py`.
+
 ### Model use
 
 - **The advisor only proposes.** It suggests a signal type and operational state for a free-text report. The supervisor applies Rule 2 to its proposal as to anyone's. If the model is unavailable or its reply is unusable, the proposal falls back to uncertainty with elevated uncertainty, never nominal.

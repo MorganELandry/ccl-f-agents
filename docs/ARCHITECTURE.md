@@ -27,6 +27,7 @@ events (plain dicts) ──► graph.py (LangGraph)  interpret ─► apply ─�
 | `cclf/statemachine.py` | The Layer 4 transition table, transcribed row by row, plus named reasons for blocked transitions, `exit_allowed()` and `reentry_allowed()`. |
 | `cclf/audit.py` | Append-only audit trail. Each entry holds the SHA-256 of the previous one, so editing, deleting or reordering an entry breaks `AuditTrail.verify()`. Entries cut off the end are caught only against a `head()` hash kept elsewhere. |
 | `cclf/supervisor.py` | The rule engine. Every state change goes through it, and every rule it enforces is labelled with the draft section it comes from. |
+| `cclf/federation.py` | One Supervisor per agent, with no central authority: Ed25519 identities and per-node trust lists, signed log heads, mirrors of remote loops accepted only on verified closures, producer attestations and lineage statements for evidence, signed grants and revocations, and an outside auditor (see [Federation](#federation)). |
 | `cclf/advisor.py` | An optional language model that proposes a signal type and operational state for a free-text report (AI Applications: "AI as Coordination Signal Classifier"). It cannot register, close, classify or authorize anything, and its output never counts as evidence. |
 | `cclf/graph.py` | A three-node LangGraph pipeline that replays events through the supervisor. A refused operation is recorded as the outcome, so a replay continues. |
 | `cclf/observability.py` | Optional OpenTelemetry spans and metrics (see `observability/README.md`). |
@@ -137,6 +138,24 @@ Requirements are cumulative across the three execution classes.
 
 **Rule 4 acceptance** is required for every class and cannot be overridden: an agent must explicitly accept authorization, risk and rationale.
 
+## Authority
+
+The draft says a single agent must accept authorization (Rule 4) but not who may. With `Settings.authority_roots` set, the runtime answers it:
+
+| Power | Needed to | Checked |
+|---|---|---|
+| `recommend` | `recommend()`: record a recommendation, which changes no gate | when made |
+| `authorize` | `accept_decision()`: the Rule 4 acceptance | when made, and again at execution |
+| `execute` | `request_execution()` | at the request, before any other gate; not overridable |
+
+- A root holds every power over every scope and may delegate it. Anyone else holds a power only through a `Grant`, made with `grant()` by someone who holds it **delegably** over that scope.
+- A grant can't be wider than the grant that backs its grantor: same power, the same scope or a narrower one, delegable only if passed on as delegable, and an expiry no later than its parent's.
+- A grant is valid only while its whole chain is: not revoked, not expired, and its parent valid. `revoke()` by the grantor, anyone above it in the chain, or a root voids it and everything derived from it.
+- An acceptance whose authority has since been revoked or has expired no longer lets the decision execute; someone with authority in force must accept again.
+- An acceptance counts only while the grant that backed it is in force; a later, separate grant doesn't revive it.
+- Choosing a decision's scope is itself an act of authority: only a root or a holder of delegable AUTHORIZE over a scope can put a decision there (`register_decision(scope=...)` or `assign_scope()`).
+- With no roots set, nothing is enforced and anyone may accept, as before.
+
 Other gate failures, apart from that relabeling block, can be overridden. An override:
 
 - is logged with identity, rationale and time (`GATE_OVERRIDE`);
@@ -164,9 +183,26 @@ AP.3, AP.4, AP.5 and AP.8 need interviews or document review and are not checked
 
 Every operation that changes state appends an entry with a logical clock time, the event, the actor and a payload. Payload enums are stored as their values. The runtime refuses an operation with no actor. `AuditTrail.verify()` recomputes the chain from the first entry onward. Given `expected_head`, it also checks that the chain ends at that hash. `run_demo.py` prints the head for this purpose.
 
+## Federation
+
+`cclf/federation.py` runs one Supervisor per agent. Nodes share no objects and no registry; each acts only on its own records and on what others sign and publish. Published logs are deep copies, so even nodes in one process can't reach into each other's records.
+
+| Piece | What it does |
+|---|---|
+| `AgentKey`, `PublicIdentity`, `TrustList` | Ed25519 keys. Each node recognizes others by public key in its own trust list; a recognized name can't be rebound to another key. |
+| `Node.publish()` → `LogSegment` | The whole log plus a `SignedHead` (length and head hash, signed). Signing the head signs the history. |
+| `parse_log()` | Replays a peer's log through the Layer 4 table and accepts only what an honest Supervisor could have written (one registration per signal, legal transitions from the current state, a mirror declared right after its registration). |
+| `Node.receive()` | Verifies signer, signature, chain and structure; refuses a rollback; two signed histories that differ, or a signed malformed log, mark the peer an equivocator (`PEER_FORK_DETECTED` and `PEER_MISBEHAVED` keep the signed heads as proof). Then re-checks every accepted remote closure, failing closed. |
+| `Node.depend()` | Registers a local mirror of a peer's loop (`MIRROR_REGISTERED`) and links it to a local decision. A nominal remote classification becomes elevated uncertainty. |
+| `Node.accept_remote_closure()` | Closes the mirror locally only if the peer's log shows a chain-sound evidence closure, recomputed here; at least one qualifying item has a producer attestation given to that peer, matching the log, with a valid signature and hash (and a passing re-check, for kinds the receiver can check); and the producer's and the evaluated process's lineage statements share nothing. Every upstream loop is verified the same way. A peer's mirror of a third node's loop is followed to that node's own log. |
+| `SignedGrant`, `SignedRevocation` | Authority across nodes, addressed to one node. `receive_grant()` checks address and signature, then `Supervisor.grant()` checks the grantor's own authority there. |
+| `audit_federation()` | Checks every log and every cross-reference from outside, and catches a node that showed different peers different histories. |
+
+**Limits.** That two lineages share nothing is a signed claim, not a proof. A revocation binds a node only once it arrives; expiry bounds the window. The receiver checks evidence by its attested origin, not its meaning.
+
 ## What the runtime cannot do
 
 - **Read meaning.** It checks evidence by kind and producer, not by content. A restatement filed as a "direct measurement" by an independent party passes.
-- **Authenticate actors.** Names are recorded as given.
+- **Authenticate actors inside one supervisor.** Names are recorded as given. Across nodes, signatures authenticate nodes, producers and grantors, but not the people behind the keys.
 - **Check AP.3, AP.4, AP.5 or AP.8.**
 - **Supply the thresholds.** The draft leaves them domain-configured; the defaults here (D1, D3–D6) are starting points.
