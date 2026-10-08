@@ -75,7 +75,7 @@ If a signal has a registered closure authority and the closer is outside it, the
 
 ## Escalation (Layer 2)
 
-The nine escalation conditions each open a `StructuralReview`. Reviews are deduplicated per condition and scope. A review is resolved only with a documented Rule 8 model update, and an escalated signal returns to review only then.
+The ten escalation conditions each open a `StructuralReview`. Reviews are deduplicated per condition and scope. A review is resolved only with a documented Rule 8 model update, and an escalated signal returns to review only then.
 
 | Condition | Trigger in this runtime |
 |---|---|
@@ -88,6 +88,7 @@ The nine escalation conditions each open a `StructuralReview`. Reviews are dedup
 | `framing_adopted_over_open_constraints` | A frame is adopted while it displaces open constraint signals |
 | `credibility_discounting` | A credibility discount is not supported by the target's track record (D7) |
 | `sender_discount_recurrence` | The agent's third unsupported discount (D6); discounts earned by a declining accuracy record do not count. The agent is placed under AP-G |
+| `execution_class_downgrade_after_block` | A decision's declared class, or the class the gate would apply, is lowered after one of its execution requests was refused. Until the review is resolved the decision cannot execute at any class, even by override |
 
 ## Exits (Layer 2, Loop Exit Taxonomy)
 
@@ -131,6 +132,8 @@ Requirements are cumulative across the three execution classes.
 | Routine | Every signal the decision depends on is registered; no Layer 0 void |
 | Elevated | Plus: classification acknowledged; no open loop left merely registered |
 | Irreversible | Plus all of the following: <ul><li>every constraint and anomaly loop closed by a chain-sound evidence closure, or exited terminal or superseded (weakest link)</li><li>evidence closure ratio (D4) over the other loop types</li><li>at least one External Evidence Source among the decision's evidence closures or the evidence cited in its Rule 4 acceptance</li><li>classification stabilized (D8)</li><li>recurrence groups reviewed</li><li>no unresolved structural reviews</li><li>open off-envelope or containment signals resolved</li><li>coherence at or above the threshold (D3)</li></ul> |
+
+**Execution class is checked, not trusted.** Every decision is irreversible unless shown otherwise. A declared routine or elevated class applies only if the decision has a registered reversal path, backed by at least one External Evidence Source showing the path was tested. That evidence can't come from whoever registered, reclassified or accepted the decision, or from a process under evaluation in its loops. Without that support, the gate applies the irreversible requirements and reports both classes (`GateResult.declared_class`, `GateResult.execution_class`). `reclassify_decision()` logs every change. Lowering a class after a refused request escalates, and that review blocks execution at every class, without override, until it is resolved.
 
 **Rule 4 acceptance** is required for every class and cannot be overridden: an agent must explicitly accept authorization, risk and rationale.
 

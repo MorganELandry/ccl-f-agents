@@ -149,7 +149,7 @@ def add_non_ees(sv: Supervisor, evidence_id: str, kind, signal_ids=()):
 
 def decision(sv: Supervisor, decision_id: str, signal_ids,
              execution_class=ExecutionClass.IRREVERSIBLE, accept: bool = True,
-             by: str = "director"):
+             by: str = "director", reversible: bool = True):
     """
     Register a decision and (unless accept=False) have one agent accept it.
 
@@ -158,10 +158,24 @@ def decision(sv: Supervisor, decision_id: str, signal_ids,
              execution_class    defaults to IRREVERSIBLE
              accept             give Rule 4 acceptance with a rationale?
              by                 the registering and accepting agent
+             reversible         for ROUTINE or ELEVATED: register a reversal
+                                path with independent-lab evidence that it
+                                was tested, so the declared class applies
+                                (default). False registers the lower class
+                                with no reversal path, so the gate treats it
+                                as irreversible (Execution Class Assignment).
     Exit:    the Decision object
     """
+    # PLAYERS IN THIS SCENE
+    #   path, evidence   the reversal path and its evidence ids, if any
+    #   d                the new Decision
+
+    path, evidence = None, ()
+    if execution_class != ExecutionClass.IRREVERSIBLE and reversible:
+        add_ees(sv, f"reversal-test-{decision_id}")
+        path, evidence = f"documented rollback for {decision_id}", (f"reversal-test-{decision_id}",)
     d = sv.register_decision(decision_id, f"decision {decision_id}", execution_class,
-                             signal_ids, by)
+                             signal_ids, by, reversal_path=path, reversal_evidence_ids=evidence)
     if accept:
         sv.accept_decision(decision_id, by, "I accept authorization, risk and rationale")
     return d

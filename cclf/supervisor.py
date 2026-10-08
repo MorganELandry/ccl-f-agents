@@ -85,6 +85,8 @@ THE PLAYBILL (what happens in this file)
         Scene 4   record_credibility_discount   detect shooting the messenger
     ACT VIII — DECISIONS, COHERENCE AND EXECUTION GATES
         Scene 1   register_decision        create a decision node
+        Scene 1b  reclassify_decision, _reversal_supported, effective_class
+                                           Execution Class Assignment
         Scene 2   link_signal              attach a signal to a decision
         Scene 3   accept_decision          Rule 4: a single named accepting agent
         Scene 4   _decision_signals        the decision's known signals
@@ -214,6 +216,12 @@ COHERENCE_WEIGHTS = {                   # Layer 4, Coherence Score (provisional)
     "recurrence_pressure": 0.15,
     "authority_compression": 0.10,
 }
+
+# CLASS_RANK — execution class -> its height, so "lowering" can be tested
+#   with <. Layer 4, Execution Class Assignment: lowest to highest, routine,
+#   elevated, irreversible.
+CLASS_RANK = {ExecutionClass.ROUTINE: 0, ExecutionClass.ELEVATED: 1,
+              ExecutionClass.IRREVERSIBLE: 2}
 
 # EXIT_TYPES_REQUIRING_OPEN_STATE_NOTE — the exit types that must record the
 #   open loop state at the time of exit. Spec (Layer 2, Loop Exit Taxonomy,
@@ -366,6 +374,11 @@ class GateResult:
         coherence          the decision's coherence score at request time
         locked_signals     constraint signals latched into trajectory_lock by
                            an override (see request_execution)
+        declared_class     the class the decision declares; execution_class
+                           above is the class the gate APPLIED, which is
+                           irreversible unless a tested reversal path
+                           supports the declared one (Execution Class
+                           Assignment)
     """
     decision_id: str
     execution_class: ExecutionClass
@@ -375,6 +388,7 @@ class GateResult:
     failures: list[str]
     coherence: float
     locked_signals: list[str] = field(default_factory=list)
+    declared_class: Optional[ExecutionClass] = None
 
 
 # ===========================================================================
@@ -1815,7 +1829,7 @@ class Supervisor:
         #   count     number of real authority closures on the decision's signals
         #   already   True if this decision has had this review before
 
-        if d.execution_class != ExecutionClass.IRREVERSIBLE:
+        if self._applied_class(d) != ExecutionClass.IRREVERSIBLE:
             return
         # --- Count authority closures --------------------------------------
         # sum(1 for ... for ... if ...) counts matches. A generator can have
@@ -2075,7 +2089,8 @@ class Supervisor:
 
     def register_decision(self, decision_id: str, description: str,
                           execution_class: ExecutionClass, signal_ids: Iterable[str],
-                          by: str) -> Decision:
+                          by: str, reversal_path: Optional[str] = None,
+                          reversal_evidence_ids: Iterable[str] = ()) -> Decision:
         """
         Register an execution-class decision node.
 
@@ -2085,7 +2100,15 @@ class Supervisor:
                                    (Layer 4, Execution Gates, ~line 990)
                  signal_ids        the signals the decision depends on
                  by                the registering agent
-        Exit:    the new Decision (not yet accepted or executed)
+                 reversal_path     how its effects could be undone (needed for
+                                   a declared class below irreversible to apply)
+                 reversal_evidence_ids  evidence that the path was tested
+        Exit:    the new Decision (not yet accepted or executed); an unknown
+                 evidence id is refused and nothing is registered
+
+        The declared class is stored as given. Whether it APPLIES is decided
+        when needed by effective_class(): "Every execution-class decision is
+        irreversible unless shown otherwise" (Execution Class Assignment).
 
         An id already in use is refused, so an accepted decision cannot be
         silently replaced. Signal ids are not checked here; unknown ones are
@@ -2094,18 +2117,161 @@ class Supervisor:
         carry authority closures.
         """
         # PLAYERS IN THIS SCENE
-        #   d   the new Decision
+        #   d                       the new Decision
+        #   reversal_evidence_ids   the offered ids, frozen into a tuple
 
         self._require_actor(by)
         if decision_id in self.decisions:
             raise TransitionRefused(f"decision {decision_id!r} already registered")
+        reversal_evidence_ids = tuple(reversal_evidence_ids)
+        self._check_evidence_ids(reversal_evidence_ids, "reversal evidence")
         self._tick()
-        d = Decision(decision_id, description, execution_class, list(signal_ids))
+        d = Decision(decision_id, description, execution_class, list(signal_ids),
+                     class_setters=(by,), reversal_path=reversal_path,
+                     reversal_evidence=reversal_evidence_ids)
         self.decisions[decision_id] = d
         self._log("DECISION_REGISTERED", by, decision=decision_id,
-                  execution_class=execution_class, signals=d.signal_ids)
+                  execution_class=execution_class, signals=d.signal_ids,
+                  reversal_path=reversal_path, reversal_evidence=list(reversal_evidence_ids),
+                  applied_class=self._applied_class(d))
         self._check_authority_count(d, by)
         return d
+
+    # =======================================================================
+    # ACT VIII, SCENE 1b — IS IT REALLY REVERSIBLE?
+    # Execution Class Assignment: irreversible by default; a lower class
+    # needs a tested reversal path; relabeling after a refusal escalates.
+    # =======================================================================
+
+    def _check_evidence_ids(self, evidence_ids: tuple, what: str) -> None:
+        """
+        Refuse unknown evidence ids before anything changes.
+
+        Enter:   evidence_ids   ids to check
+                 what           how to name them in the refusal
+        Exit:    None; raises TransitionRefused naming the unknown ids
+        """
+        unknown = [e for e in evidence_ids if e not in self.evidence]
+        if unknown:
+            raise TransitionRefused(f"unknown {what}: {unknown}")
+
+    def _reversal_supported(self, d: Decision) -> bool:
+        """
+        Is the decision's reversal path registered and shown to be tested?
+
+        Enter:   d   the decision
+        Exit:    True if it has a reversal path and at least one item of its
+                 reversal evidence is an External Evidence Source for it
+
+        Spec: Layer 4, Execution Class Assignment: "supported by at least one
+        External Evidence Source showing that the path has been tested:
+        evidence of an eligible kind produced by neither the agent who
+        registered or reclassified the decision, nor the agent accepting
+        it, nor a process under evaluation in its loops. An untested
+        reversal path counts as absent." Assessed when needed, so a later
+        acceptance by the evidence's producer withdraws the support.
+        """
+        # PLAYERS IN THIS SCENE
+        #   excluded   producers whose evidence cannot count
+
+        if not d.reversal_path:
+            return False
+        excluded = (set(d.class_setters) | {d.accepted_by}
+                    | {s.evaluated_process for s in self._decision_signals(d)})
+        return any(self.evidence[e].kind in EES_ELIGIBLE_KINDS
+                   and self.evidence[e].produced_by not in excluded
+                   for e in d.reversal_evidence)
+
+    def _applied_class(self, d: Decision) -> ExecutionClass:
+        """
+        The class the gate applies: the declared one if it is irreversible
+        or its reversal path is supported, otherwise irreversible.
+
+        Enter:   d   the decision
+        Exit:    an ExecutionClass
+        """
+        if d.execution_class == ExecutionClass.IRREVERSIBLE or self._reversal_supported(d):
+            return d.execution_class
+        return ExecutionClass.IRREVERSIBLE
+
+    def effective_class(self, decision_id: str) -> ExecutionClass:
+        """
+        Public view of _applied_class().
+
+        Enter:   decision_id   the decision
+        Exit:    the class the gate would apply now
+        """
+        return self._applied_class(self._decision(decision_id))
+
+    def reclassify_decision(self, decision_id: str, execution_class: ExecutionClass,
+                            by: str, rationale: str, reversal_path: Optional[str] = None,
+                            reversal_evidence_ids: Optional[Iterable[str]] = None) -> None:
+        """
+        Change a decision's declared execution class, never silently.
+
+        Enter:   decision_id      the decision
+                 execution_class  the new declared class
+                 by               the reclassifying agent
+                 rationale        required
+                 reversal_path, reversal_evidence_ids
+                                  replace the stored ones if given; kept if
+                                  left out (None)
+        Exit:    None. Refused (TransitionRefused) with no rationale, for an
+                 executed decision, or for unknown evidence ids. Logs
+                 DECISION_RECLASSIFIED. A lowering after a blocked request
+                 escalates.
+
+        Spec: Layer 4, Execution Class Assignment: "every change is logged
+        with the agent, rationale, and any reversal evidence. Raising the
+        class needs no evidence. Lowering it needs the same reversal-path
+        support as registering at the lower class, and a lowering made
+        after an execution request for the same decision was blocked
+        escalates to structural review automatically ... A lowering is any
+        change that lowers either the declared class or the class the gate
+        would apply."
+
+        A lowering without support is accepted, not refused: like a
+        registration at that class, it is simply gated as irreversible.
+        """
+        # PLAYERS IN THIS SCENE
+        #   d                         the decision
+        #   old_declared, old_applied its classes before the change
+        #   new_applied               the class the gate applies after it
+        #   lowered                   True if either class went down
+
+        self._require_actor(by)
+        if not rationale:
+            raise TransitionRefused("reclassification must be logged with a rationale")
+        d = self._decision(decision_id)
+        if d.executed:
+            raise TransitionRefused(f"decision {decision_id} has already executed")
+        if reversal_evidence_ids is not None:
+            reversal_evidence_ids = tuple(reversal_evidence_ids)
+            self._check_evidence_ids(reversal_evidence_ids, "reversal evidence")
+        self._tick()
+        old_declared, old_applied = d.execution_class, self._applied_class(d)
+        # --- Apply the change ----------------------------------------------
+        d.execution_class = execution_class
+        if by not in d.class_setters:
+            d.class_setters = d.class_setters + (by,)
+        if reversal_path is not None:
+            d.reversal_path = reversal_path
+        if reversal_evidence_ids is not None:
+            d.reversal_evidence = reversal_evidence_ids
+        new_applied = self._applied_class(d)
+        self._log("DECISION_RECLASSIFIED", by, decision=decision_id,
+                  **{"from": old_declared}, to=execution_class, rationale=rationale,
+                  reversal_path=d.reversal_path, evidence=list(d.reversal_evidence),
+                  applied_from=old_applied, applied_to=new_applied)
+        # --- Escalation: relabeling after a refusal ------------------------
+        lowered = (CLASS_RANK[execution_class] < CLASS_RANK[old_declared]
+                   or CLASS_RANK[new_applied] < CLASS_RANK[old_applied])
+        if lowered and d.ever_blocked:
+            self._escalate(E.EXECUTION_CLASS_DOWNGRADE_AFTER_BLOCK, f"decision:{decision_id}",
+                           f"{decision_id} lowered from {old_declared.value}/"
+                           f"{old_applied.value} to {execution_class.value}/"
+                           f"{new_applied.value} after a blocked execution request",
+                           [], by)
 
     # =======================================================================
     # ACT VIII, SCENE 2 — ANOTHER SIGNAL JOINS THE DECISION
@@ -2511,6 +2677,8 @@ class Supervisor:
                           override_rationale: Optional[str] = None) -> GateResult:
         """
         Execution gate (Layer 4). Requirements by class:
+        The class used is the APPLIED one (_applied_class): the declared
+        class only if a tested reversal path supports it, else irreversible.
           irreversible  constraint and anomaly loops evidence-closed (weakest
                         link, chain-sound); minimum evidence closure ratio for
                         the other loop types; at least one External Evidence
@@ -2595,6 +2763,10 @@ class Supervisor:
         """
         # PLAYERS IN THIS SCENE
         #   d                  the decision
+        #   applied            the class the gate applies (Execution Class
+        #                      Assignment): declared, or irreversible
+        #   relabel            unresolved downgrade-after-block reviews on it
+        #   reason             the failure text when one blocks it
         #   sigs               its registered signals
         #   score, factors     its coherence score and factor values
         #   failures           every unmet requirement, as text
@@ -2624,6 +2796,9 @@ class Supervisor:
         sigs = self._decision_signals(d)
         score, factors = self.coherence(decision_id)
         failures: list[str] = []
+        # Execution Class Assignment: the gate applies the declared class
+        # only if a tested reversal path supports it.
+        applied = self._applied_class(d)
 
         # --- A decision executes once --------------------------------------
         if d.executed:
@@ -2632,11 +2807,29 @@ class Supervisor:
         # Checked first, and returned at once: no other gate is evaluated
         # and override_rationale is ignored.
         if not d.accepted_by:
+            d.ever_blocked = True
             self._log("EXECUTION_REFUSED", by, decision=decision_id,
-                      reason="Rule 4: no agent has accepted this decision")
-            return GateResult(decision_id, d.execution_class, False, False, False,
+                      reason="Rule 4: no agent has accepted this decision",
+                      declared_class=d.execution_class, execution_class=applied)
+            return GateResult(decision_id, applied, False, False, False,
                               ["Rule 4: no named agent has accepted authorization, risk "
-                               "acceptance and rationale"], score)
+                               "acceptance and rationale"], score,
+                              declared_class=d.execution_class)
+        # --- Relabeled after a refusal: blocked at every class -------------
+        # Never overridable: "Until that review is resolved, the decision
+        # cannot execute at any class, and this cannot be overridden."
+        relabel = sorted(r.review_id for r in self.reviews if not r.resolved
+                         and r.condition == E.EXECUTION_CLASS_DOWNGRADE_AFTER_BLOCK
+                         and r.scope == f"decision:{decision_id}")
+        if relabel:
+            d.ever_blocked = True
+            reason = (f"unresolved structural reviews: {relabel} (execution class lowered "
+                      "after a blocked request; cannot execute at any class until resolved)")
+            self._log("EXECUTION_BLOCKED", by, decision=decision_id, failures=[reason],
+                      declared_class=d.execution_class, execution_class=applied,
+                      architecture_void=False, coherence=score, factors=factors)
+            return GateResult(decision_id, applied, False, False, False, [reason], score,
+                              declared_class=d.execution_class)
 
         # --- Layer 0: architecture voids (every class) ---------------------
         voids = self.architecture_check(decision_id)
@@ -2647,7 +2840,7 @@ class Supervisor:
         if missing or any(s.state == S.UNREGISTERED for s in sigs):
             failures.append(f"signal registration incomplete: {missing}")
         # --- Elevated requirements (elevated and irreversible) -------------
-        if d.execution_class in (ExecutionClass.ELEVATED, ExecutionClass.IRREVERSIBLE):
+        if applied in (ExecutionClass.ELEVATED, ExecutionClass.IRREVERSIBLE):
             unclassified = [s.signal_id for s in sigs if s.operational_state is None]
             if unclassified:
                 failures.append(f"classification not acknowledged: {unclassified}")
@@ -2656,7 +2849,7 @@ class Supervisor:
                 failures.append(f"open loops not documented: {undocumented}")
         suppressed = [s.signal_id for s in sigs if s.state == S.SUPPRESSED]
         # --- Irreversible requirements -------------------------------------
-        if d.execution_class == ExecutionClass.IRREVERSIBLE:
+        if applied == ExecutionClass.IRREVERSIBLE:
             # Escalation first: a suppressed signal before irreversible
             # execution escalates automatically (Layer 2), and the review it
             # opens must block this very request, so it is raised before the
@@ -2718,29 +2911,33 @@ class Supervisor:
 
         # --- Clean pass: execute -------------------------------------------
         # `not failures` is True when the list is empty.
-        result = GateResult(decision_id, d.execution_class, not failures, False,
-                            bool(voids), failures, score)
+        result = GateResult(decision_id, applied, not failures, False,
+                            bool(voids), failures, score, declared_class=d.execution_class)
         if not failures:
             d.executed = True
             self._log("EXECUTION_PERMITTED", by, decision=decision_id,
-                      execution_class=d.execution_class, coherence=score, factors=factors)
+                      declared_class=d.execution_class, execution_class=applied,
+                      coherence=score, factors=factors)
             return result
 
         # --- Failures and no override: blocked -----------------------------
         if not override_rationale:
+            d.ever_blocked = True
             self._log("EXECUTION_BLOCKED", by, decision=decision_id,
-                      execution_class=d.execution_class, failures=failures,
+                      declared_class=d.execution_class, execution_class=applied,
+                      failures=failures,
                       architecture_void=bool(voids), coherence=score, factors=factors)
             return result
 
         # Override: permitted, but permanent, attributed and consequential.
         self._log("GATE_OVERRIDE", by, decision=decision_id,
-                  execution_class=d.execution_class, failures=failures,
+                  declared_class=d.execution_class, execution_class=applied,
+                  failures=failures,
                   architecture_void=bool(voids), rationale=override_rationale,
                   coherence=score, factors=factors)
         locked = []
         # --- Irreversible override: open-loop irreversible execution -------
-        if d.execution_class == ExecutionClass.IRREVERSIBLE:
+        if applied == ExecutionClass.IRREVERSIBLE:
             # Latch each constraint/anomaly signal under review into
             # trajectory_lock,
             # with a lock-in closure record (the spec's fourth closure type,

@@ -73,6 +73,13 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
   - An elevated override latches nothing.
 - **Decision-level EES** (draft, October 2026). Evidence cited in the Rule 4 acceptance counts if its kind is EES-eligible and its producer is neither a process under evaluation in the decision's loops nor the accepting agent. The draft states no novelty or chain test for acceptance evidence, so the runtime applies none.
 - **Closure Chain** (draft, October 2026). Dependencies are whatever `depends_on` records; the runtime cannot discover them. A dependency cycle is accepted at registration and simply never counts. `CHAIN_WEAKENED` is logged on reopen, the only way a closed upstream loop can lose its standing.
+- **Execution Class Assignment** (draft, October 2026).
+  - Reversal evidence must be EES-eligible and produced by none of these: an agent who registered or reclassified the decision, its accepting agent, or a process under evaluation in its loops. No novelty test applies, because the draft states none.
+  - Support is assessed when needed. If the evidence's producer later becomes the accepting agent, the support is withdrawn.
+  - "Blocked" means any execution request that wasn't permitted, including a Rule 4 refusal.
+  - A lowering without reversal support is accepted, not refused; like a registration at that class, it is simply gated as irreversible.
+  - The authority-closure-count escalation uses the applied class, so it also fires for a decision declared lower without support.
+  - The TLA+ model does not cover execution classes.
 - **Duplicate IDs are refused** for signals, evidence and decisions, so an accepted record cannot be silently replaced.
 
 ### Model use

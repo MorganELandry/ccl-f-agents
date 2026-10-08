@@ -34,7 +34,7 @@ A passing check means no counterexample exists **within the bounds** below. It i
 - Rule 4 acceptance;
 - the irreversible gate (a constraint counts as resolved only if evidence-closed or exited terminal/superseded) and its logged override.
 
-The model does not cover Closure Chain or the decision-level External Evidence Source requirement; those are tested in Python (`tests/test_gate_design.py`).
+The model does not cover Closure Chain, the decision-level External Evidence Source requirement, or Execution Class Assignment; those are tested in Python (`tests/test_gate_design.py`, `tests/test_execution_class.py`).
 
 **Result.** TLC explores every reachable state: 31,485,931 distinct states, depth 9. It finds no violation.
 

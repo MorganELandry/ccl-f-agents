@@ -30,7 +30,7 @@ THE PLAYBILL (what happens in this file)
                 EES_ELIGIBLE_KINDS    kinds that can be External Evidence Sources
       Scene 8   Referent              technical reality vs. customer (Rule 5.3)
       Scene 9   ExecutionClass        irreversible / elevated / routine
-      Scene 10  EscalationCondition   the nine automatic escalation conditions
+      Scene 10  EscalationCondition   the ten automatic escalation conditions
     ACT II — THE RECORDS (dataclasses that hold facts)
       Scene 1   Evidence              one item of evidence (frozen)
       Scene 2   ClosureRecord         one typed closure event (frozen)
@@ -386,14 +386,16 @@ class ExecutionClass(str, Enum):
 
 class EscalationCondition(str, Enum):
     """
-    The nine automatic escalation conditions (Layer 2).
+    The ten automatic escalation conditions (Layer 2).
 
     One member per bullet of the Escalation Conditions list, in the spec's
     order: recurrence threshold (Rule 7); off-envelope or containment
     classification; authority-closure count on an irreversible decision;
     role-switch closure on a constraint; lock-in with open constraints;
     suppression before execution; framing adopted over open constraints;
-    credibility discounting; and repeated sender discount (AP-G).
+    credibility discounting; repeated sender discount (AP-G); and an
+    execution class lowered after a blocked request (Layer 4, Execution
+    Class Assignment; added October 2026).
     """
     RECURRENCE_THRESHOLD = "recurrence_threshold"
     OFF_ENVELOPE_OR_CONTAINMENT = "off_envelope_or_containment"
@@ -404,6 +406,7 @@ class EscalationCondition(str, Enum):
     FRAMING_ADOPTED_OVER_OPEN_CONSTRAINTS = "framing_adopted_over_open_constraints"
     CREDIBILITY_DISCOUNTING = "credibility_discounting"
     SENDER_DISCOUNT_RECURRENCE = "sender_discount_recurrence"
+    EXECUTION_CLASS_DOWNGRADE_AFTER_BLOCK = "execution_class_downgrade_after_block"
 
 
 # ---------------------------------------------------------------------------
@@ -705,6 +708,15 @@ class Decision:
       acceptance_evidence    ids of evidence cited in the Rule 4 acceptance;
                              it can supply the decision's External Evidence
                              Source (Layer 4, Execution Gates)
+      class_setters          every agent who registered or reclassified the
+                             decision; their evidence cannot show its
+                             reversal path was tested
+      reversal_path          the registered reversal path (free text), or None
+      reversal_evidence      ids of evidence offered as showing the reversal
+                             path was tested (Layer 4, Execution Class
+                             Assignment)
+      ever_blocked           True once any execution request on it was not
+                             permitted; a lowering after that escalates
     """
     decision_id: str
     description: str
@@ -714,6 +726,10 @@ class Decision:
     acceptance_rationale: str = ""
     executed: bool = False
     acceptance_evidence: tuple[str, ...] = ()
+    class_setters: tuple[str, ...] = ()
+    reversal_path: Optional[str] = None
+    reversal_evidence: tuple[str, ...] = ()
+    ever_blocked: bool = False
 
 
 # ===========================================================================

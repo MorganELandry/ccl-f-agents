@@ -20,7 +20,8 @@ Organizations make catastrophic decisions while holding the information needed t
   - **lock-in** closures: recorded when an override latches open constraints that are still under review.
 
   Evidence can be registered as depending on other loops (Closure Chain). An evidence closure counts only if every loop its evidence depends on is itself evidence-closed, all the way up, and reopening an upstream loop logs every closure that loses its standing.
-- **Escalates on the draft's nine conditions.** These include recurrence, repeated authority closures, suppression before execution, framing over open constraints and credibility discounting. Each escalation opens a structural review, and only a documented Rule 8 model update resolves it.
+- **Escalates on the draft's ten conditions.** These include recurrence, repeated authority closures, suppression before execution, framing over open constraints, credibility discounting, and relabeling a decision to a lower class after the gate refused it. Each escalation opens a structural review, and only a documented Rule 8 model update resolves it.
+- **Checks the execution class instead of trusting it.** A decision is irreversible unless a registered reversal path is backed by independent evidence that it was tested; declaring a launch "routine" doesn't skip the irreversible gate.
 - **Gates execution by class** (routine, elevated, irreversible). Every class fails on a detectable Layer 0 void, such as an unstewarded failure mode or a captured reporting channel. Irreversible execution also needs:
   - every constraint and anomaly loop closed by evidence (weakest link: a loop closed by authority doesn't count);
   - a minimum evidence-closure ratio for the other loop types;
@@ -65,7 +66,7 @@ pip install -r requirements.txt
 python run_demo.py challenger            # also: therac25, mcas
 python run_demo.py mcas --quiet          # summary only
 python run_demo.py therac25 --audit therac25_audit.json --no-obs
-pytest                                   # 271 tests, no API key needed (4 of them need Java)
+pytest                                   # 321 tests, no API key needed (4 of them need Java)
 ```
 
 The scenarios make no model calls, so the demo needs no API key.

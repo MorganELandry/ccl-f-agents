@@ -1,7 +1,7 @@
 """
 THE INTERLOCK
-A Play in Twenty-One Scenes
-===========================
+A Play in Twenty-Three Scenes
+=============================
 
 PROLOGUE
 --------
@@ -50,23 +50,25 @@ THE PLAYBILL
     Scene 19  test_suppressed_signal_blocks_the_first_irreversible_request
     Scene 20  test_duplicate_decision_is_refused
     Scene 21  test_successor_who_is_the_steward_is_a_void   (found by the Alloy model)
+    Scene 22  test_adding_reversal_evidence_after_a_block_is_a_lowering
+    Scene 23  test_relabel_review_cannot_be_overridden
 """
 
 # ===========================================================================
 # STAGE MANAGEMENT (imports)
 # ---------------------------------------------------------------------------
 # pytest       fixtures, parametrize, raises.
-# cclf         Architecture, ClosureType, CommitmentState, ExecutionClass,
-#              ExitType, OperationalState, Settings, SignalType, Supervisor,
-#              TransitionRefused.
+# cclf         Architecture, ClosureType, CommitmentState, EscalationCondition,
+#              ExecutionClass, ExitType, OperationalState, Settings,
+#              SignalType, Supervisor, TransitionRefused.
 # stagehands   CUST, TECH, PROCESS, to_review, add_ees, decision, entries.
 # ===========================================================================
 
 import pytest
 
 from cclf import (
-    Architecture, ClosureType, CommitmentState, ExecutionClass, ExitType, OperationalState,
-    Settings, SignalType, Supervisor, TransitionRefused,
+    Architecture, ClosureType, CommitmentState, EscalationCondition, ExecutionClass, ExitType,
+    OperationalState, Settings, SignalType, Supervisor, TransitionRefused,
 )
 from stagehands import CUST, PROCESS, TECH, add_ees, decision, entries, to_review
 
@@ -644,5 +646,66 @@ def test_successor_who_is_the_steward_is_a_void(sv):
     assert result.architecture_void and not result.permitted
     assert any(f.startswith("AP.1b") and "single point of failure" in f
                for f in result.failures)
+
+
+# ===========================================================================
+# SCENE 22 — THE SAME LABEL, A NEW EXCUSE
+# Proves: Execution Class Assignment, "A lowering is any change that lowers
+# either the declared class or the class the gate would apply, so supplying
+# reversal evidence for an already-declared lower class after a refusal
+# counts too."
+# ===========================================================================
+
+def test_adding_reversal_evidence_after_a_block_is_a_lowering(sv):
+    """
+    A decision declared ROUTINE with no reversal path is gated as
+    irreversible and blocked; adding a tested path afterwards, without
+    changing the declared class, escalates.
+
+    Enter:   sv   fixture
+    Exit:    passes if the applied class drops to routine and a
+             downgrade-after-block review is opened
+    """
+    to_review(sv, "c")
+    sv.attempt_closure("c", "manager", TECH, [], "management decision")
+    decision(sv, "d", ["c"], X.ROUTINE, reversible=False)
+    assert not sv.request_execution("d", "director").permitted
+    add_ees(sv, "rollback-drill")
+    sv.reclassify_decision("d", X.ROUTINE, "director", "rollback tested",
+                           reversal_path="documented rollback",
+                           reversal_evidence_ids=["rollback-drill"])
+    assert sv.effective_class("d") == X.ROUTINE
+    assert any(r.condition == EscalationCondition.EXECUTION_CLASS_DOWNGRADE_AFTER_BLOCK
+               and r.scope == "decision:d" for r in sv.reviews)
+
+
+# ===========================================================================
+# SCENE 23 — NO OVERRIDE FOR A RELABEL
+# Proves: Execution Class Assignment, "Until that review is resolved, the
+# decision cannot execute at any class, and this cannot be overridden."
+# ===========================================================================
+
+def test_relabel_review_cannot_be_overridden(sv):
+    """
+    After a downgrade-after-block escalation, an override is refused too.
+
+    Enter:   sv   fixture
+    Exit:    passes if the override request is not permitted, not marked
+             overridden, and no GATE_OVERRIDE is logged
+    """
+    # PLAYERS IN THIS SCENE
+    #   result   the GateResult of the override attempt
+
+    to_review(sv, "c")
+    sv.attempt_closure("c", "manager", TECH, [], "management decision")
+    decision(sv, "d", ["c"])
+    assert not sv.request_execution("d", "director").permitted
+    add_ees(sv, "rollback-drill")
+    sv.reclassify_decision("d", X.ROUTINE, "director", "it can be rolled back",
+                           reversal_path="documented rollback",
+                           reversal_evidence_ids=["rollback-drill"])
+    result = sv.request_execution("d", "director", override_rationale="proceed")
+    assert not result.permitted and not result.overridden
+    assert entries(sv, "GATE_OVERRIDE") == []
 
 # EXEUNT — end of file.
