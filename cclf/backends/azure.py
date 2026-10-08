@@ -28,8 +28,9 @@ Compliance prerequisites (not enforced in code — must be verified operationall
   3. Network access restricted to hospital VNet or Private Endpoint
   4. Diagnostic logs forwarded to a BAA-covered log sink (Azure Monitor)
   5. Customer-managed keys (CMK) enabled for data at rest if required
-  6. PHI scrubbed from evidence_buffer before agent invocation
-     OR evidence_buffer contains only de-identified / coded content
+  6. PHI scrubbed from the text sent to the model (for the advisor, the
+     report text passed to Advisor.propose()) OR that text contains only
+     de-identified / coded content
 
 See COMPLIANCE.md for the full gap analysis.
 

@@ -20,11 +20,14 @@ What the replay makes the runtime do: two concerns are closed by authority
 validating evidence; the MCAS signal is reclassified after its review
 opened, so its classification counts as not stabilized; and the reporter
 for the failure mode is also an interested party, which the gate reports as
-the AP-F captured channel. The service-entry decision is blocked (its
-constraint and anomaly loops are not evidence-closed, and no External
-Evidence Source supports it), then proceeds through a logged override
-(open-loop irreversible execution) that latches the AOA anomaly, still
-under review, into trajectory lock.
+the AP-F captured channel. Registering the service-entry decision
+escalates its authority-closure count. The decision is then blocked (AP-F
+and AP.1b voids, constraint and anomaly loops not evidence-closed, an
+unstabilized classification, no External Evidence Source, an unresolved
+structural review, coherence below threshold), then proceeds through a
+logged override (open-loop irreversible execution) that latches the AOA
+anomaly, still under review, into trajectory lock and escalates lock-in
+with open constraint loops.
 
 THE PLAYBILL
     Scene 1  the architecture record              (Rule 9)
@@ -142,8 +145,9 @@ MCAS: list[dict] = [
 
     # =======================================================================
     # SCENE 5 — THE IRREVERSIBLE DECISION
-    # Rule 4 acceptance, a request that is blocked, then the same request
-    # with override_rationale. The AOA anomaly is still under review, so the
+    # Registering the decision escalates its authority-closure count (two
+    # authority closures). Rule 4 acceptance, a request that is blocked,
+    # then the same request with override_rationale. The AOA anomaly is still under review, so the
     # override latches it into trajectory lock; the two constraints closed
     # by authority are listed as still open, because the irreversible gate
     # does not accept authority closure of a constraint (Reversibility

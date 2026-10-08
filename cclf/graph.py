@@ -84,8 +84,9 @@ READER'S NOTE — why a refused operation is recorded, not raised
     When the supervisor refuses an operation (an escalated signal cannot be
     closed, a signal id is registered twice, an act has no named agent, ...)
     it raises TransitionRefused and the operation does not go ahead. A refused
-    state-machine transition is also written to the audit trail as TRANSITION_REFUSED
-    before the exception is raised. (A nominal classification without
+    state-machine transition is also written to the audit trail as
+    TRANSITION_REFUSED (a refused re-entry as REENTRY_REFUSED) before the
+    exception is raised. (A nominal classification without
     evidence is different: it is not raised at all; classify() records
     CLASSIFICATION_REJECTED and applies elevated uncertainty instead.)
     The apply node catches the exception and returns it as

@@ -1,7 +1,7 @@
 """
 THE PRESSURE TEST
 A Play in Ten Scenes
-===================
+====================
 
 PROLOGUE
 --------
@@ -505,6 +505,13 @@ def langchain_model(backend: Optional[str]) -> Model:
     llm = get_llm(backend)
 
     def call(system: str, user: str) -> str:
+        """
+        Ask the chat model once.
+
+        Enter:   system   the system prompt
+                 user     the user message
+        Exit:    the reply's text content
+        """
         return llm.invoke([SystemMessage(content=system), HumanMessage(content=user)]).content
     return call
 
@@ -566,6 +573,10 @@ def report(summary: dict, label: str) -> str:
     #   a, g   the accuracy and neutral_accuracy_by_group dicts
     # "{x:.0%}" multiplies by 100 and adds "%", with no decimal places.
     def pct(x):
+        """
+        Enter:   x   a share between 0 and 1, or None
+        Exit:    "NN%" (whole percent), or "n/a" for None
+        """
         return "n/a" if x is None else f"{x:.0%}"
     a, g = summary["accuracy"], summary["neutral_accuracy_by_group"]
     return "\n".join([
@@ -590,7 +601,8 @@ def main(argv=None) -> int:
     Command-line entry point.
 
     Enter:   argv   argument list for testing; None means use sys.argv
-    Exit:    0 on success; 2 if the model could not be set up
+    Exit:    0 on success; 2 if the model could not be set up or a model
+             call failed during the run (a message goes to stderr)
              side effects: prints the report; with --out, writes a JSON file
              holding the backend label, the summary and every sample
     """
@@ -598,7 +610,7 @@ def main(argv=None) -> int:
     #   p         the argparse parser
     #   args      the parsed options (backend, samples, out)
     #   model     the Model function
-    #   exc       (on failure) why the model could not be set up
+    #   exc       (on failure) why model set-up, or a model call, failed
     #   results   the Samples from run()
     #   summary   the dict from summarize()
     #   label     the backend name for display

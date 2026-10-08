@@ -160,6 +160,13 @@ def _langchain_ask(backend: Optional[str]) -> Ask:
 
     # --- The function we hand back ------------------------------------------
     def ask(system: str, user: str) -> str:
+        """
+        Send one system prompt and one report to the model.
+
+        Enter:   system   the instructions (SYSTEM_PROMPT when called by propose)
+                 user     the report text
+        Exit:    the reply's text (the message's .content)
+        """
         # Send the system prompt and the report; return the reply's text.
         return llm.invoke([SystemMessage(content=system), HumanMessage(content=user)]).content
     return ask
@@ -183,6 +190,8 @@ class Advisor:
     # -----------------------------------------------------------------------
     def __init__(self, ask: Optional[Ask] = None, backend: Optional[str] = None):
         """
+        Remember how to reach a model; build nothing yet.
+
         Enter:   ask       an Ask function to use, or None to build one later
                  backend   backend name passed to _langchain_ask if needed
         Exit:    stores both; nothing is built or called yet

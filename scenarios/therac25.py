@@ -90,7 +90,7 @@ THERAC25: list[dict] = [
 # (refused: an assertion is not EES-eligible), open review, attempt closure.
 # `+=` on a list appends all items of the right-hand list (it extends it).
 # The third signal in GROUP crosses the recurrence threshold; from then on
-# each review opens straight into escalated and its closure is refused.
+# each review opens and is escalated at once, and its closure is refused.
 # ===========================================================================
 for n in range(1, 7):
     THERAC25 += [
@@ -125,7 +125,9 @@ for n in range(1, 7):
 # closure it supersedes; the reopened signals are escalated at once because
 # the open recurrence review names them. Only the two signals that were
 # actually closed (1 and 2) can be reopened; 3-6 were never closed.
-# The final request has no override_rationale, so it simply ends blocked.
+# Registering the decision escalates its authority-closure count (the two
+# authority closures exceed the threshold of one). The final request has no
+# override_rationale, so it simply ends blocked.
 # ===========================================================================
 THERAC25 += [
     {"op": "add_evidence", "evidence_id": "e-tyler-reproduction",

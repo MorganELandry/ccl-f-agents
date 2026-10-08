@@ -14,8 +14,8 @@ before it, so editing or deleting any entry breaks the chain, and
 verify() finds the break.
 
 Where this fits: the Supervisor (supervisor.py) owns one AuditTrail and
-writes an entry for every event it handles (registrations, transitions,
-closures, overrides, refusals). Layer 4 calls the audit trail "the
+writes an entry for the events it handles (registrations, transitions,
+closures, overrides, and refused transitions and re-entries). Layer 4 calls the audit trail "the
 supervisor's non-erasable event log". run_demo.py calls AuditTrail.verify()
 on the finished log and saves it with to_json().
 
@@ -72,6 +72,7 @@ READER'S NOTE — @staticmethod
 # dataclass   builds the frozen AuditEntry record.
 # Enum        recognised by _canonical() so enum members become their values.
 # Any, Iterator   type hints: "any type"; "something you can loop over".
+# Optional    Optional[X] means "an X, or None" (verify()'s expected_head).
 # ===========================================================================
 
 from __future__ import annotations

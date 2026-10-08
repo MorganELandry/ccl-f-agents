@@ -8,20 +8,21 @@ PROLOGUE
 Tests for closure typing in cclf/supervisor.py (attempt_closure, reopen,
 adopt_frame), derived from CCL-F v0.2:
 
-  Closure Quality table (spec lines 461-466): evidence closure is valid;
+  Closure Quality table (Layer 2, Closure Quality): evidence closure is valid;
     authority, role-switch and lock-in closure are flagged.
-  Role-Switch Closure (Key Definitions, line 1214): the registrant closes
+  Role-Switch Closure (Key Definitions, Role-Switch Closure): the registrant closes
     their own signal by consulting the other referent, with nothing new.
-  Evidence Novelty (line 484) and External Evidence Source (lines 486-498):
-    evidence closure needs evidence that is BOTH new since registration AND
-    causally independent of the process under evaluation. Model output
-    never qualifies (line 494).
-  Autonomy-Bounded Closure (lines 563-575): a closer outside the closure
+  Evidence Novelty (Layer 2, Evidence Novelty Requirement) and External
+    Evidence Source (Layer 2, External Evidence Source (EES)): evidence
+    closure needs evidence that is BOTH new since registration AND causally
+    independent of the process under evaluation. Model output never
+    qualifies (EES).
+  Autonomy-Bounded Closure (Layer 3): a closer outside the closure
     authority produces "attempted closure", recorded but not a resolution.
-  Reopen (line 940): "A closed loop cannot be silently reopened — every
+  Reopen (Layer 4, Commitment State Machine): "A closed loop cannot be silently reopened — every
     reopen transition is permanently logged with rationale, the identity of
     the reopening agent, and the closure record it supersedes."
-  Framing Signal (line 1212): frame adoption is "an authority closure of the
+  Framing Signal (Key Definitions, Framing Signal): frame adoption is "an authority closure of the
     framing signal combined with a suppression event on the signals it
     displaced".
 
@@ -89,8 +90,9 @@ from stagehands import CUST, PROCESS, TECH, add_ees, add_non_ees, entries, to_re
 S = CommitmentState
 
 # NON_EES_KINDS — the three evidence kinds the spec never accepts as an
-#   External Evidence Source: model output (line 494), and restated
-#   assertion / internal analysis by the same reasoning process (line 490).
+#   External Evidence Source: model output, and restated assertion /
+#   internal analysis by the same reasoning process (Layer 2, External
+#   Evidence Source (EES)).
 NON_EES_KINDS = [EvidenceKind.MODEL_OUTPUT, EvidenceKind.ASSERTION,
                  EvidenceKind.INTERNAL_ANALYSIS]
 
@@ -112,7 +114,8 @@ def sv():
 
 # ===========================================================================
 # SCENE 1 — THE VALID READING
-# Proves: novel + EES evidence makes an evidence closure (lines 463, 498).
+# Proves: novel + EES evidence makes an evidence closure (Layer 2, Closure
+# Quality and External Evidence Source (EES)).
 # ===========================================================================
 
 def test_novel_ees_evidence_gives_evidence_closure(sv):
@@ -135,7 +138,8 @@ def test_novel_ees_evidence_gives_evidence_closure(sv):
 # ===========================================================================
 # SCENE 2 — VOICES THAT DO NOT COUNT
 # Proves: model output, assertion and internal analysis never make evidence
-# closure, however new they are (lines 490-494). (Parametrized.)
+# closure, however new they are (Layer 2, External Evidence Source (EES)).
+# (Parametrized.)
 # ===========================================================================
 
 @pytest.mark.parametrize("kind", NON_EES_KINDS, ids=lambda k: k.value)
@@ -157,7 +161,7 @@ def test_non_ees_kinds_never_qualify(sv, kind):
 # ===========================================================================
 # SCENE 3 — THE PROCESS MAY NOT VOUCH FOR ITSELF
 # Proves: evidence produced by the evaluated process is common-mode, not
-# EES (line 496: "does the evidence-generating process share a causal
+# EES (Layer 2, External Evidence Source (EES): "does the evidence-generating process share a causal
 # ancestry with the process under evaluation").
 # ===========================================================================
 
@@ -177,7 +181,8 @@ def test_evidence_from_evaluated_process_does_not_qualify(sv):
 # ===========================================================================
 # SCENE 4 — NOR MAY THE REGISTRANT
 # Proves: evidence produced by the signal's own registrant is not causally
-# independent of "the reasoning process that produced the signal" (line 490).
+# independent of "the reasoning process that produced the signal" (Layer 2,
+# External Evidence Source (EES)).
 # ===========================================================================
 
 def test_evidence_from_registrant_does_not_qualify(sv):
@@ -195,7 +200,8 @@ def test_evidence_from_registrant_does_not_qualify(sv):
 
 # ===========================================================================
 # SCENE 5 — OLD NEWS, PART ONE
-# Proves: evidence cited at registration is not novel (line 484).
+# Proves: evidence cited at registration is not novel (Layer 2, Evidence
+# Novelty Requirement).
 # ===========================================================================
 
 def test_evidence_present_at_registration_is_not_novel(sv):
@@ -232,8 +238,8 @@ def test_evidence_existing_before_registration_is_not_novel(sv):
 
 # ===========================================================================
 # SCENE 7 — ONE TRUE WITNESS IS ENOUGH
-# Proves: line 492, "at least one External Evidence Source supporting the
-# closing claim"; non-qualifying company does not spoil it.
+# Proves: Layer 2, External Evidence Source (EES): "at least one External
+# Evidence Source supporting the closing claim"; non-qualifying company does not spoil it.
 # ===========================================================================
 
 def test_one_qualifying_item_among_many_is_enough(sv):
@@ -252,7 +258,7 @@ def test_one_qualifying_item_among_many_is_enough(sv):
 
 # ===========================================================================
 # SCENE 8 — "TAKE OFF YOUR ENGINEERING HAT"
-# Proves: line 1214, same agent, different referent, nothing new from
+# Proves: Key Definitions, Role-Switch Closure: same agent, different referent, nothing new from
 # either -> role-switch closure. (The Lund pattern, with no pending
 # escalation in the way.)
 # ===========================================================================
@@ -293,8 +299,9 @@ def test_same_agent_with_new_evidence_is_not_role_switch(sv):
 
 # ===========================================================================
 # SCENE 10 — THE SENIOR OVERRIDE
-# Proves: line 464, "A senior agent overrides without new evidence" ->
-# authority closure; a different agent is never a role switch (line 468).
+# Proves: Layer 2, Closure Quality: "A senior agent overrides without new
+# evidence" -> authority closure; a different agent is never a role switch
+# (Closure Quality: "authority closure involves a different agent").
 # ===========================================================================
 
 def test_different_agent_without_evidence_is_authority(sv):
@@ -318,8 +325,9 @@ def test_same_agent_same_referent_is_authority(sv):
     """
     Implementation-decision test: the spec names no closure type for a
     registrant who closes their own signal without changing referent or
-    adding evidence (it is not role-switch per line 1214, and line 492 says
-    a closure without EES is authority, role-switch or false closure). The
+    adding evidence (it is not role-switch per Key Definitions, Role-Switch
+    Closure, and Layer 2, External Evidence Source (EES) says a closure
+    without EES is authority, role-switch or false closure). The
     code types it AUTHORITY, which is the flagged default.
 
     Enter:   sv   fixture
@@ -344,6 +352,7 @@ def test_closure_flags_follow_the_quality_table(sv):
              -> flagged True
     """
     # PLAYERS IN THIS SCENE
+    #   sid     each of the three signal ids in turn ("ev", "au", "rs")
     #   flags   closure_type value -> flagged, read off the audit trail
 
     # --- Setting the stage: one closure of each kind ------------------------
@@ -362,7 +371,8 @@ def test_closure_flags_follow_the_quality_table(sv):
 
 # ===========================================================================
 # SCENE 13 — A MESSAGE ACROSS THE BOUNDARY
-# Proves: lines 567 and 573: beyond the closure-authority boundary closure
+# Proves: Layer 3, Autonomy-Bounded Closure: beyond the closure-authority
+# boundary closure
 # "can be attempted but not enforced"; attempted closure "is recorded as a
 # coordination event but does not constitute loop resolution".
 # ===========================================================================
@@ -386,7 +396,8 @@ def test_closer_outside_authority_leaves_state_unchanged(sv):
 
 # ===========================================================================
 # SCENE 14 — INSIDE THE BOUNDARY
-# Proves: local closure is valid within the closer's scope (line 571).
+# Proves: local closure is valid within the closer's scope (Layer 3,
+# Autonomy-Bounded Closure, Local Closure).
 # ===========================================================================
 
 def test_closer_inside_authority_closes(sv):
@@ -405,9 +416,11 @@ def test_closer_inside_authority_closes(sv):
 
 # ===========================================================================
 # SCENE 15 — NO SILENT REOPENING
-# Proves: line 940, every reopen is logged with rationale, the reopening
-# agent and the superseded closure record; line 942, the original closure
-# record is retained and the reopen count is kept.
+# Proves: Layer 4, Commitment State Machine (fourth blocked transition):
+# every reopen is logged with rationale, the reopening agent and the
+# superseded closure record; and (same section, "Closed states are stable
+# but not terminal") the original closure record is retained and the
+# reopen count is kept.
 # ===========================================================================
 
 def test_reopen_is_logged_with_rationale_agent_and_superseded_record(sv):
@@ -442,8 +455,9 @@ def test_reopen_is_logged_with_rationale_agent_and_superseded_record(sv):
 
 # ===========================================================================
 # SCENE 16 — THE ROLE-SWITCH REOPEN NEEDS FRESH EYES
-# Proves: line 892, "closed_role_switch -> under_review (mandatory
-# independent review; L2 flag)"; line 468, "requiring independent review".
+# Proves: Layer 4, Commitment State Machine, "closed_role_switch ->
+# under_review (mandatory independent review; L2 flag)"; Layer 2, Closure
+# Quality, "requiring independent review".
 # ===========================================================================
 
 def test_role_switch_reopen_needs_independent_reviewer(sv):
@@ -465,7 +479,7 @@ def test_role_switch_reopen_needs_independent_reviewer(sv):
 
 # ===========================================================================
 # SCENE 17 — THE BACK DOOR INTO REVIEW
-# Proves: open_review() on a closed signal should not
+# Proves: open_review() on a closed signal is refused, so it cannot
 # perform a reopen that skips Scene 15's obligations.
 # ===========================================================================
 
@@ -485,7 +499,7 @@ def test_open_review_cannot_silently_reopen(sv):
 
 # ===========================================================================
 # SCENE 18 — FRAME ADOPTION IS AUTHORITY CLOSURE
-# Proves: line 1212 types frame adoption as authority
+# Proves: Key Definitions, Framing Signal types frame adoption as authority
 # closure regardless of who adopts it.
 # ===========================================================================
 

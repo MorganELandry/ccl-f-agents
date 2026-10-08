@@ -15,15 +15,17 @@ against the primary Rogers Commission volumes; until that read is done,
 treat actor attributions here as the draft's, not independently verified.
 
 What the replay shows: the runtime refuses the later launch-constraint
-waivers once the recurrence threshold is crossed (Rule 7), rejects a
-nominal classification of an off-envelope condition (Rule 2), refuses the
+waivers once the recurrence threshold is crossed (Rule 7), rejects every
+nominal classification made without validating evidence (Rule 2), refuses the
 Lund reversal because the off-envelope classification has already escalated
 that signal (the same reversal is typed as role-switch closure in
-tests/test_closure.py when no escalation is pending), records the framing signal's
-suppression of the open uncertainty, and blocks the irreversible launch
-decision. The launch then proceeds only through a logged override. The
-override records open-loop irreversible execution and escalates lock-in with
-open constraint loops. None is latched into trajectory lock (v0.2 defines
+tests/test_closure.py when no escalation is pending), records the framing
+signal's suppression of the open uncertainty, escalates the decision's three
+authority closures when the decision is registered and the suppressed signal
+when execution is requested, and blocks the irreversible launch decision.
+The launch then proceeds only through a logged override. The override
+records open-loop irreversible execution and escalates lock-in with open
+constraint loops. None is latched into trajectory lock (v0.2 defines
 that transition only from under_review): the open constraints are by then
 escalated, and the rest were closed by authority, which the irreversible
 gate does not accept as resolution, so all of them are listed still open.
@@ -148,8 +150,10 @@ CHALLENGER: list[dict] = [
     # SCENE 3 — THE NIGHT BEFORE LAUNCH
     # Three new signals: the no-launch constraint (classified off_envelope,
     # which escalates it at once), the seal uncertainty, and the framing
-    # signal whose adoption suppresses the uncertainty. Lund's closure of
-    # the constraint is then refused because it is already escalated.
+    # signal whose adoption suppresses the uncertainty. (Only an
+    # uncertainty signal is displaced, so the "frame adopted over open
+    # constraints" escalation does not fire.) Lund's closure of the
+    # constraint is then refused because it is already escalated.
     # =======================================================================
     # --- The night of January 27, 1986 -----------------------------------
     {"op": "add_evidence", "evidence_id": "e-temperature-vs-test-data",
@@ -203,9 +207,13 @@ CHALLENGER: list[dict] = [
 
     # =======================================================================
     # SCENE 4 — THE IRREVERSIBLE DECISION
-    # The launch decision names every signal above. Rule 4 acceptance, then
-    # an execution request (blocked), then the same request with an
-    # override_rationale (permitted, permanently logged).
+    # The launch decision names every signal above. Registering it escalates
+    # the authority-closure count (three authority closures: 51-F, FRR 2 and
+    # the frame). Rule 4 acceptance, then an execution request (blocked; it
+    # also escalates the suppressed seal-uncertainty signal), then the same
+    # request with an override_rationale (permitted, permanently logged; it
+    # escalates lock-in with open constraint loops and locks nothing, since
+    # no constraint is still under_review).
     # =======================================================================
     # The signal list is built with + and a list comprehension (FRRs 2-6).
     {"op": "register_decision", "decision_id": "launch-51L",

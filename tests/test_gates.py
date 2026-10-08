@@ -6,28 +6,39 @@ A Play in Twenty-Three Scenes
 PROLOGUE
 --------
 Tests for Supervisor.request_execution(), the execution gates of CCL-F v0.2
-Layer 4 (spec lines 988-996), together with what the gates draw on:
+Layer 4 (Layer 4, Execution Gates), together with what the gates draw on:
 
-  Execution Gates table (lines 990-994):
-    Irreversible  No open constraint loops; classification stabilized;
-                  recurrence groups reviewed; minimum evidence closure ratio met
+  Execution Gates table (Layer 4, Execution Gates):
+    Irreversible  Constraint and anomaly loops evidence-closed; minimum
+                  evidence closure ratio met for the other loops; at least
+                  one External Evidence Source; classification stabilized;
+                  recurrence groups reviewed
     Elevated      Classification acknowledged; open loops documented
     Routine       Signal registration complete
-  Coherence threshold (line 960): "A score below the domain-configured
-    threshold blocks irreversible execution pending acknowledgment."
-  Overrides (line 996): "Gates can be overridden. Every override is
-    permanently logged with the agent's identity, rationale, and timestamp."
-  Rule 4 (line 338): "Before any execution-class decision, a single agent
-    must explicitly accept authorization, risk acceptance, and rationale
-    documentation as their responsibility."
-  Lock-in (lines 946, 1216, 1236): overriding with open constraint loops is
-    "open-loop irreversible execution", recorded as under_review ->
-    trajectory_lock with a lock-in closure record.
-  Layer 0 (lines 159-268): with the Architecture Precondition unmet, gates
-    are "structurally void". The runtime reports the voids it can check.
-  Reversibility Logic (line 506) and Operational States (lines 1190-1192).
+  Coherence threshold (Layer 4, Coherence Score): "A score below the
+    domain-configured threshold blocks irreversible execution pending
+    acknowledgment."
+  Overrides (Layer 4, Execution Gates): "Gates can be overridden. Every
+    override is permanently logged with the agent's identity, rationale, and
+    timestamp."
+  Rule 4 (Layer 1, Rule 4: Decisions Have Living Ownership): "Before any
+    execution-class decision, a single agent must explicitly accept
+    authorization, risk acceptance, and rationale documentation as their
+    responsibility."
+  Lock-in (Layer 4, Commitment State Machine; Key Definitions, Lock-in
+    Closure; Key Definitions, Open-Loop Irreversible Execution): overriding
+    with open constraint loops is "open-loop irreversible execution",
+    recorded as under_review -> trajectory_lock with a lock-in closure record.
+  Layer 0 (Layer 0, The Architecture Precondition): with the Architecture
+    Precondition unmet, gates are "structurally void". The runtime reports
+    the voids it can check.
+  Reversibility Logic (Layer 2, Reversibility Logic) and the Off-Envelope
+    and Containment operational states (Key Definitions, Operational State).
+  Execution Class Assignment (Layer 4, Execution Gates): a lowering after a
+    blocked request escalates, and that review cannot be overridden.
 
 THE PLAYBILL
+    Prelude   sv (fixture), evidence_close() (helper)
     Scene 1   test_routine_needs_only_registration
     Scene 2   test_routine_with_unregistered_signal_is_blocked  (was a spec mismatch; now fixed)
     Scene 3   test_elevated_needs_classification_and_documented_loops
@@ -111,8 +122,8 @@ def evidence_close(sv, signal_id):
 
 # ===========================================================================
 # SCENE 1 — THE ROUTINE GATE
-# Proves: "Routine — Signal registration complete": a merely registered,
-# unclassified signal is enough.
+# Proves: the Routine gate row, "Signal registration complete": a merely
+# registered, unclassified signal is enough.
 # ===========================================================================
 
 def test_routine_needs_only_registration(sv):
@@ -122,6 +133,9 @@ def test_routine_needs_only_registration(sv):
     Enter:   sv   fixture
     Exit:    passes if permitted with no failures and EXECUTION_PERMITTED logged
     """
+    # PLAYERS IN THIS SCENE
+    #   result   the GateResult
+
     sv.register_signal("u", SignalType.UNCERTAINTY, "d", "eng", TECH, PROCESS)
     decision(sv, "d", ["u"], X.ROUTINE)
     result = sv.request_execution("d", "director")
@@ -148,8 +162,8 @@ def test_routine_with_unregistered_signal_is_blocked(sv):
 
 # ===========================================================================
 # SCENE 3 — THE ELEVATED GATE
-# Proves: "Elevated — Classification acknowledged; open loops documented":
-# unclassified fails; classified and in review passes.
+# Proves: the Elevated gate row, "Classification acknowledged; open loops
+# documented": unclassified fails; classified and in review passes.
 # ===========================================================================
 
 def test_elevated_needs_classification_and_documented_loops(sv):
@@ -160,6 +174,9 @@ def test_elevated_needs_classification_and_documented_loops(sv):
     Exit:    passes if the first decision's failures name classification and
              undocumented loops, and the second decision is permitted
     """
+    # PLAYERS IN THIS SCENE
+    #   failures   the failure texts of the first (registered-only) request
+
     sv.register_signal("u", SignalType.UNCERTAINTY, "d", "eng", TECH, PROCESS)
     decision(sv, "d1", ["u"], X.ELEVATED)
     failures = sv.request_execution("d1", "director").failures
@@ -173,8 +190,9 @@ def test_elevated_needs_classification_and_documented_loops(sv):
 
 # ===========================================================================
 # SCENE 4 — CONSTRAINT LOOPS EVIDENCE-CLOSED
-# Proves: the first irreversible requirement; an open uncertainty (not a
-# constraint or anomaly) does not trip it. (tests/test_gate_design.py holds
+# Proves: the irreversible requirement "Constraint and anomaly loops
+# evidence-closed"; an open uncertainty (not a constraint or anomaly) does
+# not trip it. (tests/test_gate_design.py holds
 # the full set written from the spec text.)
 # ===========================================================================
 
@@ -186,6 +204,9 @@ def test_irreversible_blocks_unresolved_constraint_loops(sv):
     Enter:   sv   fixture
     Exit:    passes if the failure names "c" but not "u"
     """
+    # PLAYERS IN THIS SCENE
+    #   result   the GateResult
+
     to_review(sv, "c")
     to_review(sv, "u", signal_type=SignalType.UNCERTAINTY)
     decision(sv, "d", ["c", "u"])
@@ -196,7 +217,8 @@ def test_irreversible_blocks_unresolved_constraint_loops(sv):
 
 # ===========================================================================
 # SCENE 5 — CLASSIFICATION STABILIZED
-# Proves: the second irreversible requirement (Rule 3: "held stable before
+# Proves: the irreversible requirement "classification stabilized" (Rule 3:
+# "held stable before
 # irreversible action proceeds"); reclassification during review is
 # instability.
 # ===========================================================================
@@ -204,7 +226,8 @@ def test_irreversible_blocks_unresolved_constraint_loops(sv):
 def test_irreversible_blocks_unstable_classification(sv):
     """
     Implementation-decision test for the stability rule (D8: stable means
-    classified and not reclassified since review last opened). A signal
+    classified and not reclassified to a different state since review last
+    opened). A signal
     reclassified after review opened blocks the gate even when closed by
     evidence.
 
@@ -221,8 +244,8 @@ def test_irreversible_blocks_unstable_classification(sv):
 
 # ===========================================================================
 # SCENE 6 — RECURRENCE GROUPS REVIEWED
-# Proves: the third irreversible requirement; resolving the group's
-# structural review clears it.
+# Proves: the irreversible requirement "recurrence groups reviewed";
+# resolving the group's structural review clears it.
 # ===========================================================================
 
 def test_irreversible_blocks_unreviewed_recurrence_group(sv):
@@ -233,6 +256,9 @@ def test_irreversible_blocks_unreviewed_recurrence_group(sv):
     Exit:    passes if the failure names the group before resolution, and the
              decision is permitted after resolution and evidence closure
     """
+    # PLAYERS IN THIS SCENE
+    #   n   each member number 1-3 of recurrence group "g"
+
     for n in (1, 2, 3):
         sv.register_signal(f"m{n}", SignalType.UNCERTAINTY, "d", "eng", TECH, PROCESS,
                            recurrence_group="g")
@@ -297,6 +323,7 @@ def test_coherence_threshold_blocks_irreversible():
     # PLAYERS IN THIS SCENE
     #   strict, lax   supervisors with thresholds 0.95 and the default
     #   sv            each in turn
+    #   failures      the strict supervisor's failure texts
 
     strict, lax = Supervisor(Settings(coherence_threshold=0.95)), Supervisor()
     assert lax.settings.coherence_threshold == 0.6
@@ -313,7 +340,8 @@ def test_coherence_threshold_blocks_irreversible():
 # ===========================================================================
 # SCENE 9 — THE GATE OPENS FOR CLEAN WORK
 # Proves: when every requirement is met the irreversible gate permits, not
-# overridden; "The system does not prevent decisions" (line 996).
+# overridden; "The system does not prevent decisions" (Layer 4, Execution
+# Gates).
 # ===========================================================================
 
 def test_clean_irreversible_decision_is_permitted(sv):
@@ -323,6 +351,9 @@ def test_clean_irreversible_decision_is_permitted(sv):
     Enter:   sv   fixture
     Exit:    passes if permitted, not overridden, the decision is executed
     """
+    # PLAYERS IN THIS SCENE
+    #   result   the GateResult
+
     to_review(sv, "c")
     evidence_close(sv, "c")
     decision(sv, "d", ["c"])
@@ -366,8 +397,8 @@ def test_rule4_acceptance_required_and_not_overridable(sv):
 
 # ===========================================================================
 # SCENE 11 — THE OVERRIDE ON THE PERMANENT RECORD
-# Proves: line 996, the override is logged with identity, rationale and
-# timestamp, along with what it overrode.
+# Proves: (Layer 4, Execution Gates) the override is logged with identity,
+# rationale and timestamp, along with what it overrode.
 # ===========================================================================
 
 def test_override_logged_with_identity_rationale_and_time(sv):
@@ -395,9 +426,11 @@ def test_override_logged_with_identity_rationale_and_time(sv):
 
 # ===========================================================================
 # SCENE 12 — OPEN-LOOP IRREVERSIBLE EXECUTION
-# Proves: lines 946 and 1236: overriding an irreversible gate latches each
-# constraint still under review into trajectory_lock with a LOCK_IN closure
-# record, and the event is logged as open-loop irreversible execution.
+# Proves: (Layer 4, Commitment State Machine; Key Definitions, Open-Loop
+# Irreversible Execution) overriding an irreversible gate latches each
+# constraint (or anomaly) loop still under review into trajectory_lock with
+# a LOCK_IN closure record, and the event is logged as open-loop
+# irreversible execution.
 # ===========================================================================
 
 def test_override_latches_open_constraints_into_trajectory_lock(sv):
@@ -447,6 +480,7 @@ def test_layer0_voids_are_reported():
     #            untested hotline
     #   sv       a Supervisor holding it
     #   result   the GateResult
+    #   prefix   each void label that must appear
 
     arch = Architecture(reporters={"mode": {"maker"}}, interested_parties={"mode": {"maker"}},
                         channels_tested={"hotline": False})
@@ -463,9 +497,9 @@ def test_layer0_voids_are_reported():
 
 # ===========================================================================
 # SCENE 14 — PARKED IS NOT RESOLVED
-# Proves: a deferred constraint is "Open — indefinite,
-# documented" (line 533); Reversibility Logic (line 506) still requires
-# evidence closure or an explicit open-loop authorization.
+# Proves: a deferred constraint is "Open — indefinite, documented" (Layer 2,
+# Loop Exit Taxonomy); Reversibility Logic (Layer 2, Reversibility Logic)
+# still requires evidence closure or an explicit open-loop authorization.
 # ===========================================================================
 
 def test_exited_constraint_still_counts_as_open(sv):
@@ -484,11 +518,11 @@ def test_exited_constraint_still_counts_as_open(sv):
 
 # ===========================================================================
 # SCENE 15 — OFF THE MAP, OR IN CONTAINMENT
-# Proves: line 1190, off-envelope requires
-# "Evidence-based classification ... before irreversible execution";
-# line 1192, containment requires "extraordinary justification and
-# independent steward review". Neither is satisfied by an anomaly whose
-# structural review is still open.
+# Proves: off-envelope requires "Evidence-based classification ... before
+# irreversible execution" (Key Definitions, Operational State: Off-Envelope);
+# containment requires "extraordinary justification and independent steward
+# review" (Key Definitions, Operational State: Containment). Neither is
+# satisfied by an anomaly whose structural review is still open.
 # ===========================================================================
 
 @pytest.mark.parametrize("state", [O.OFF_ENVELOPE, O.CONTAINMENT], ids=lambda s: s.value)
@@ -543,6 +577,9 @@ def test_elevated_override_does_not_lock(sv):
     Exit:    passes if permitted+overridden, no locked signals, the
              constraint still under review, no OPEN_LOOP_IRREVERSIBLE_EXECUTION
     """
+    # PLAYERS IN THIS SCENE
+    #   result   the GateResult of the override
+
     to_review(sv, "c")
     sv.register_signal("u", SignalType.UNCERTAINTY, "d", "eng", TECH, PROCESS)
     decision(sv, "d", ["c", "u"], X.ELEVATED)
@@ -615,6 +652,9 @@ def test_duplicate_decision_is_refused(sv):
     Exit:    passes if TransitionRefused is raised and the original
              decision (and its acceptance) is untouched
     """
+    # PLAYERS IN THIS SCENE
+    #   first   the original, accepted Decision
+
     to_review(sv, "u", signal_type=SignalType.UNCERTAINTY)
     first = decision(sv, "d", ["u"], X.ROUTINE)
     with pytest.raises(TransitionRefused):

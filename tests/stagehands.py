@@ -91,6 +91,9 @@ def to_review(sv: Supervisor, signal_id: str, signal_type=SignalType.CONSTRAINT,
     Exit:    the Signal object (it may be under_review or, if a pending
              escalation names it, already escalated)
     """
+    # PLAYERS IN THIS SCENE
+    #   sig   the newly registered Signal (returned)
+
     # --- Supply a steward and successor unless the caller chose otherwise --
     kwargs.setdefault("steward", "steward")
     kwargs.setdefault("successor", "successor")

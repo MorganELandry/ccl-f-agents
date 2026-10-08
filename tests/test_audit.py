@@ -10,15 +10,19 @@ Tests for cclf/audit.py, the audit trail of CCL-F v0.2 Layer 4:
   "Every state transition is append-only and immutable. The audit trail
    supports full post-mortem replay from any point in the program history
    ... The record cannot be revised after the fact — only extended."
-   (spec line 1000)
-  "the audit trail is the supervisor's non-erasable event log" (line 868)
-  Overrides and reopens carry "the agent's identity" (lines 940, 996).
+   (Layer 4, Audit Trail)
+  "the audit trail is the supervisor's non-erasable event log" (Layer 4,
+   Runtime Realization)
+  Overrides and reopens carry the acting agent's identity (Layer 4,
+   Commitment State Machine: "the identity of the reopening agent";
+   Layer 4, Execution Gates: "the agent's identity").
 
 The code makes each entry carry the hash of the entry before it, so an
 edited, removed or reordered entry breaks the chain, and AuditTrail.verify()
 reports where. These tests attack the log in each of those ways.
 
 THE PLAYBILL
+    Prelude   sv (fixture)
     Scene 1   test_every_transition_is_logged
     Scene 2   test_entries_chain_from_genesis
     Scene 3   test_actor_identity_is_required
@@ -42,7 +46,7 @@ READER'S NOTE — dataclasses.replace
 # ---------------------------------------------------------------------------
 # dataclasses.replace   forge altered copies of frozen entries.
 # pytest                fixtures, raises.
-# cclf                  AuditTrail, SignalType, Supervisor.
+# cclf                  AuditTrail, SignalType, Supervisor, TransitionRefused.
 # cclf.audit            GENESIS, the prev_hash of the first entry.
 # stagehands            CUST, TECH, PROCESS, to_review, transitions.
 # ===========================================================================
@@ -73,7 +77,8 @@ def sv():
     A Supervisor with one constraint taken into review and closed by authority.
 
     Enter:   (nothing)
-    Exit:    the Supervisor; its log has at least six entries
+    Exit:    the Supervisor; its log has five entries (four TRANSITIONs and
+             one CLASSIFIED)
     """
     # PLAYERS IN THIS SCENE
     #   s   the new Supervisor
@@ -87,7 +92,7 @@ def sv():
 # ===========================================================================
 # SCENE 1 — NOTHING MOVES UNRECORDED
 # Proves: "Every state transition is append-only": the signal's whole path
-# is in the log, with the acting agent.
+# is in the log.
 # ===========================================================================
 
 def test_every_transition_is_logged(sv):
@@ -210,7 +215,8 @@ def test_verify_detects_edited_entry(sv):
     """
     # PLAYERS IN THIS SCENE
     #   log        a copy of the entries
-    #   i          index of the entry to forge (the closure)
+    #   i          index of the entry to forge: first the last entry (the
+    #              closure), then entry 2
     #   forged     the altered entry
     #   ok, why    verify()'s answer
 
@@ -289,6 +295,9 @@ def test_payload_cannot_be_edited_in_place(sv):
     reach the stored entry. This scene checks the guarantee the spec needs
     (any revision is detectable), not that mutation is impossible.
     """
+    # PLAYERS IN THIS SCENE
+    #   ok, why   verify()'s answer after the mutation
+
     sv.audit.entries()[0].payload["signal"] = "rewritten"
     ok, why = AuditTrail.verify(sv.audit.entries())
     assert not ok and why.startswith("entry 0:")

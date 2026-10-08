@@ -24,6 +24,7 @@ THE PLAYBILL (what happens in this file)
                 CLOSED_STATES         the three closed commitment states
       Scene 4   ExitType              the fourteen loop exit types
                 EXIT_LEAVES_LOOP_OPEN exits after which the loop is still open
+                RESOLVING_EXITS       exits that meet the irreversible gate
       Scene 5   LegalSubtype          the four legal-exit sub-types
       Scene 6   ClosureType           the four closure types
       Scene 7   EvidenceKind          what process produced a piece of evidence
@@ -236,7 +237,9 @@ class ExitType(str, Enum):
 
 # EXIT_LEAVES_LOOP_OPEN — exit types after which the loop still counts as
 #   open. Read by Signal.is_open below, so an exited-but-unresolved loop
-#   still blocks an irreversible gate (Reversibility Logic).
+#   still counts as open wherever is_open is asked (for example the
+#   supervisor's coherence score). The irreversible gate itself asks a
+#   different question and uses RESOLVING_EXITS instead.
 #   Cannot move to DRAMATIS PERSONAE: it is built from ExitType members,
 #   and that class is only defined just above.
 # Exit types whose "Loop State After" in the v0.2 Loop Exit Taxonomy is open
@@ -368,11 +371,17 @@ class ExecutionClass(str, Enum):
     """
     Execution classes for gating (Layer 4, Execution Gates).
 
-      IRREVERSIBLE  no open constraint loops; classification stabilized;
-                    recurrence groups reviewed; minimum evidence closure
-                    ratio met
+      IRREVERSIBLE  constraint and anomaly loops evidence-closed; minimum
+                    evidence closure ratio met for the other loops; at least
+                    one External Evidence Source; classification stabilized;
+                    recurrence groups reviewed
       ELEVATED      classification acknowledged; open loops documented
       ROUTINE       signal registration complete
+
+    A decision's declared class is not always the class its gate applies:
+    per Execution Class Assignment, "Every execution-class decision is
+    irreversible unless shown otherwise", so the supervisor gates a decision
+    as IRREVERSIBLE unless a tested reversal path supports the lower class.
     """
     IRREVERSIBLE = "irreversible"
     ELEVATED = "elevated"
@@ -437,8 +446,9 @@ class Evidence:
       at            supervisor clock tick when it was added (Evidence Novelty)
       depends_on    ids of the signals (coordination loops) this evidence
                     depends on: its upstream loops (Layer 2, Closure Chain).
-                    A closure resting on it counts as evidence closure only
-                    if every upstream loop is itself evidence-closed.
+                    An evidence closure can rest on this item only if every
+                    upstream loop is itself closed by a chain-sound
+                    evidence closure, all the way up.
 
     Frozen: once recorded, evidence cannot be edited.
     """
@@ -623,7 +633,8 @@ class Signal:
 
         Trajectory lock is not open: per Layer 4 it is a terminal marker that
         the loop "remained open at the point irreversible execution
-        proceeded" — the gate logic counts it separately.
+        proceeded" — callers that need it (for example the supervisor's
+        coherence score) count it separately.
         """
         # --- Exited: open only if the exit type leaves the loop open -------
         if self.state == CommitmentState.EXITED:
@@ -644,8 +655,11 @@ class Signal:
         Enter:   (none)
         Exit:    True for SignalType.CONSTRAINT
 
-        The irreversible gate requires "No open constraint loops", so the
-        supervisor asks this often.
+        The supervisor asks this for the rules that name constraint signals
+        alone: the "Role-switch closure detected on a safety-constraint
+        signal" escalation, and framing adopted while constraint signals
+        remain open. (The irreversible gate covers constraint *and* anomaly
+        loops, so it uses high_consequence instead.)
         """
         return self.signal_type == SignalType.CONSTRAINT
 
@@ -660,10 +674,12 @@ class Signal:
         Enter:   (none)
         Exit:    True for CONSTRAINT and ANOMALY signals
 
-        AP.1b and AP-A speak of "high-consequence failure modes". Under
+        AP.1b and AP-A speak of a "high-consequence failure mode". Under
         implementation decision D9 (which Layer 0 sub-conditions a runtime
         can check), these two signal types are treated as naming one, and
-        Supervisor.architecture_check skips the others.
+        Supervisor.architecture_check skips the others. The same two types
+        are the ones the irreversible gate holds to weakest link
+        ("Constraint and anomaly loops evidence-closed").
         """
         return self.signal_type in (SignalType.CONSTRAINT, SignalType.ANOMALY)
 
@@ -700,7 +716,9 @@ class Decision:
     Fields:
       decision_id            unique name
       description            what is being decided
-      execution_class        which Execution Gate applies (ExecutionClass)
+      execution_class        the declared ExecutionClass; the gate applies
+                             IRREVERSIBLE instead unless a tested reversal
+                             path supports it (Execution Class Assignment)
       signal_ids             the signals this decision rests on
       accepted_by            the Rule 4 accepting agent, or None until then
       acceptance_rationale   their documented rationale ("" until accepted)

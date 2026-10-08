@@ -8,13 +8,15 @@ PROLOGUE
 Tests for cclf/advisor.py and cclf/graph.py: the probabilistic automation
 (a language model) and the event pipeline that feeds the supervisor.
 
-What CCL-F v0.2 asks of probabilistic automation (AI Applications, spec
-lines 1296-1320):
-  - "AI as Coordination Signal Classifier" (line 1308): identify which of
-    the six signal types a report is.
-  - As a behavioural specification (line 1310): "never classify
-    off-envelope conditions as nominal without validating evidence".
-  - EES (line 494): model output never counts as independent evidence.
+What CCL-F v0.2 asks of probabilistic automation (AI Applications):
+  - "AI as Coordination Signal Classifier" (AI Applications, Three
+    Applications): identify which of the six signal types a report is.
+  - As a behavioural specification (AI Applications, Three Applications,
+    CCL-F as Behavioral Specification for Probabilistic Automation):
+    "never classify off-envelope conditions as nominal without validating
+    evidence".
+  - EES (Layer 2, External Evidence Source (EES), What does not qualify):
+    model output never counts as independent evidence.
 
 So the advisor may only propose. These tests use fake models (plain
 Python functions) to show three things: when the model is missing or
@@ -98,6 +100,10 @@ def fake_model(reply):
     Enter:   reply   the text to return, or an Exception instance to raise
     Exit:    a function (system, user) -> str, the shape Advisor expects
     """
+    # PLAYERS IN THIS SCENE
+    #   ask   the inner fake (a closure over `reply`): it ignores both
+    #         prompts and raises `reply` if it is an Exception, else returns it
+
     def ask(system, user):
         if isinstance(reply, Exception):
             raise reply
@@ -148,6 +154,9 @@ def test_bad_replies_fall_back_never_nominal(reply):
     Enter:   reply   an exception or unusable text
     Exit:    passes if the state is the fallback and from_model is False
     """
+    # PLAYERS IN THIS SCENE
+    #   p   the proposal
+
     p = Advisor(ask=fake_model(reply)).propose("report")
     assert p.operational_state == FALLBACK_STATE != OperationalState.NOMINAL
     assert p.from_model is False
@@ -166,6 +175,9 @@ def test_good_reply_is_parsed_and_marked_from_model():
     Enter:   (nothing)
     Exit:    passes if type, state and from_model are as replied
     """
+    # PLAYERS IN THIS SCENE
+    #   p   the proposal
+
     p = Advisor(ask=fake_model("Sure: " + NOMINAL_REPLY)).propose("report")
     assert p.signal_type == SignalType.CONSTRAINT
     assert p.operational_state == OperationalState.NOMINAL
@@ -174,9 +186,10 @@ def test_good_reply_is_parsed_and_marked_from_model():
 
 # ===========================================================================
 # SCENE 5 — THE MODEL SAYS NOMINAL; THE SUPERVISOR SAYS NO
-# Proves: line 1310 and Rule 2: a model's nominal without validating
-# evidence is refused, the refusal names the model as proposer, and the
-# signal is registered with the type the model proposed.
+# Proves: (AI Applications, Three Applications) and Rule 2: a model's
+# nominal without validating evidence is refused, the refusal names the
+# model as proposer, and the signal is registered with the type the model
+# proposed.
 # ===========================================================================
 
 def test_model_nominal_without_evidence_is_refused_by_supervisor():
@@ -191,6 +204,7 @@ def test_model_nominal_without_evidence_is_refused_by_supervisor():
     # PLAYERS IN THIS SCENE
     #   sv    the Supervisor after replay
     #   sig   the registered signal
+    #   rejected   the single CLASSIFICATION_REJECTED entry
 
     sv = replay([REPORT], advisor=Advisor(ask=fake_model(NOMINAL_REPLY)))
     sig = sv.signals["r1"]
@@ -203,8 +217,9 @@ def test_model_nominal_without_evidence_is_refused_by_supervisor():
 
 # ===========================================================================
 # SCENE 6 — WORDS ARE NOT EVIDENCE
-# Proves: line 494, model output recorded as evidence cannot close a
-# signal by evidence, even when it is new.
+# Proves: (Layer 2, External Evidence Source (EES), What does not qualify)
+# model output recorded as evidence cannot close a signal by evidence, even
+# when it is new.
 # ===========================================================================
 
 def test_model_proposal_is_not_evidence():
@@ -276,6 +291,7 @@ def test_replay_records_refusals_and_continues():
     # PLAYERS IN THIS SCENE
     #   outcomes   (op, refused) for each event, collected by the callback
     #   events     report, premature closure, then open_review
+    #   sv         the Supervisor after replay
 
     outcomes = []
     events = [

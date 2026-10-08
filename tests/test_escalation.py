@@ -1,29 +1,33 @@
 """
-THE NINE ALARMS
+THE TEN ALARMS
 A Play in Eighteen Scenes
 =========================
 
 PROLOGUE
 --------
 Tests for automatic escalation to structural review in cclf/supervisor.py,
-derived from CCL-F v0.2 Layer 2, Escalation Conditions (spec lines
-508-520), Rules 7 and 8 (lines 402-431), Credibility Discounting
-(lines 470-480) and the escalated -> under_review recovery transition
-(line 886).
+derived from CCL-F v0.2 Layer 2, Escalation Conditions, Rules 7 and 8
+(Layer 1), Credibility Discounting (Layer 2, including its AP-G threshold)
+and the escalated -> under_review recovery transition (Layer 4, Commitment
+State Machine).
 
-The spec lists nine conditions that "automatically escalate to structural
-review". The code names them in EscalationCondition. Each scene below makes
-one condition happen and checks that a StructuralReview with that
-condition is opened. Then the recovery rules are checked: an escalated
+The spec lists ten conditions that "automatically escalate to structural
+review". The code names them in EscalationCondition. Scenes 1-11 make each
+of the first nine happen and check that a StructuralReview with that
+condition is opened. The tenth (execution class downgraded after a blocked
+request, EXECUTION_CLASS_DOWNGRADE_AFTER_BLOCK) is tested in
+tests/test_execution_class.py. Then the recovery rules are checked: an escalated
 signal cannot close (Rules 7-8), and it returns to under_review only when
 the review documents a coordination-model update (Rule 8: "the review
 produce a documented update to the coordination model — not a
 re-approval of existing practice").
 
-Settings the spec leaves open are the code's choices (D1, D5, D6, D7):
+Settings the spec leaves open are the code's choices (D1, D5, D7):
 recurrence threshold 3, authority-closure threshold 1 ("exceeds", so two
-closures), sender-discount threshold 3, and the "stable or improving"
-accuracy rule. Tests that pin those numbers say so in their docstrings.
+closures), and the "stable or improving" accuracy rule. The sender-discount
+threshold of 3 (D6) is now fixed by the spec itself (Credibility
+Discounting, AP-G threshold: "The threshold is three"). Tests that pin
+those numbers say so in their docstrings.
 
 THE PLAYBILL
     Scene 1   test_recurrence_threshold_escalates_on_third_member   (impl. decision D1)
@@ -36,7 +40,7 @@ THE PLAYBILL
     Scene 8   test_suppressed_before_execution_escalates
     Scene 9   test_framing_adopted_over_open_constraints_escalates
     Scene 10  test_credibility_discounting_escalates_only_for_accurate_senders
-    Scene 11  test_sender_discount_recurrence_is_ap_g          (impl. decision D6)
+    Scene 11  test_sender_discount_recurrence_is_ap_g          (spec AP-G threshold; D6)
     Scene 12  test_accuracy_rule               (impl. decision D7; parametrized, 8 runs)
     Scene 13  test_escalated_signal_cannot_close
     Scene 14  test_resolution_requires_model_update
@@ -114,7 +118,7 @@ def test_recurrence_threshold_escalates_on_third_member(sv):
     """
     Implementation-decision test (D1: recurrence threshold 3, from the
     Challenger note "The escalation threshold was crossed after the third
-    occurrence", line 412). Two members: no review. Third: one review
+    occurrence", Rule 7, Cases). Two members: no review. Third: one review
     naming all three.
 
     Enter:   sv   fixture
@@ -123,7 +127,8 @@ def test_recurrence_threshold_escalates_on_third_member(sv):
     """
     # PLAYERS IN THIS SCENE
     #   n        member number
-    #   review   the recurrence review
+    #   review   the recurrence review (unpacked: `[review] = ...` also
+    #            asserts there is exactly one)
 
     for n in (1, 2):
         sv.register_signal(f"m{n}", SignalType.ANOMALY, "erosion", "eng", TECH, PROCESS,
@@ -192,7 +197,8 @@ def test_authority_closure_count_escalates(sv):
 def test_authority_count_ignores_closure_order(sv):
     """
     Two authority closures, then the irreversible decision: still escalates
-    (at the latest when execution is requested).
+    (registering the decision runs the count; the test checks after the
+    execution request).
 
     Enter:   sv   fixture
     Exit:    passes if an AUTHORITY_CLOSURE_COUNT review exists after the
@@ -210,7 +216,7 @@ def test_authority_count_ignores_closure_order(sv):
 # ===========================================================================
 # SCENE 5 — THE HAT CHANGE ON A CONSTRAINT
 # Proves: "Role-switch closure detected on a safety-constraint signal"
-# escalates. The closure stands (line 468: "not blocked, but permanently
+# escalates. The closure stands (Closure Quality: "not blocked, but permanently
 # recorded and requiring independent review").
 # ===========================================================================
 
@@ -288,8 +294,8 @@ def test_suppressed_before_execution_escalates(sv):
 # ===========================================================================
 # SCENE 9 — "PROVE IT'S UNSAFE"
 # Proves: "Framing signal achieves frame adoption while technical
-# constraint signals remain open"; and per line 1212 the displaced signal
-# is suppressed.
+# constraint signals remain open"; and per Key Definitions, Framing Signal,
+# the displaced signal is suppressed.
 # ===========================================================================
 
 def test_framing_adopted_over_open_constraints_escalates(sv):
@@ -310,8 +316,9 @@ def test_framing_adopted_over_open_constraints_escalates(sv):
 
 # ===========================================================================
 # SCENE 10 — SHOOTING THE MESSENGER
-# Proves: line 519, discounting escalates against an agent "whose signals
-# show a stable or improving accuracy rate", and not otherwise (line 229:
+# Proves: Escalation Conditions, discounting escalates against an agent
+# "whose signals show a stable or improving accuracy rate", and not
+# otherwise (Layer 0, AP.7 Source Standing:
 # "Where negative characterization tracks accurately with genuinely poor
 # signal quality, no void exists").
 # ===========================================================================
@@ -334,15 +341,16 @@ def test_credibility_discounting_escalates_only_for_accurate_senders(sv):
 
 # ===========================================================================
 # SCENE 11 — AP-G: THE CHANNEL IS BROKEN FOR THIS SENDER
-# Proves: line 520, recurrence of discounting against the same agent
-# escalates as Sender Discount and becomes a Layer 0 void for that
-# sender's signals (lines 478, 1202).
+# Proves: Escalation Conditions, recurrence of discounting against the same
+# agent escalates as Sender Discount and becomes a Layer 0 void for that
+# sender's signals (Credibility Discounting, "Architectural target and
+# escalation to Layer 0"; Key Definitions, Sender Discount (AP-G)).
 # ===========================================================================
 
 def test_sender_discount_recurrence_is_ap_g(sv):
     """
-    The draft's AP-G threshold (Layer 2, "AP-G threshold": three; D6 is
-    the Settings value that holds it). The third discount opens
+    The draft's AP-G threshold (Layer 2, Credibility Discounting, "AP-G
+    threshold": three; D6 is the Settings value that holds it). The third discount opens
     SENDER_DISCOUNT_RECURRENCE, and a gate over that sender's constraint
     reports an AP-G void.
 
@@ -351,6 +359,7 @@ def test_sender_discount_recurrence_is_ap_g(sv):
              three, and reported by the gate
     """
     # PLAYERS IN THIS SCENE
+    #   label    each characterization used for the first two discounts
     #   result   GateResult for a decision over boisjoly's signal
 
     sv.record_signal_outcome("boisjoly", True, "observer")
@@ -394,6 +403,9 @@ def test_accuracy_rule(sv, record, expected):
              expected   what accuracy_stable_or_improving should return
     Exit:    passes if the rule returns `expected`
     """
+    # PLAYERS IN THIS SCENE
+    #   correct   each recorded outcome in turn
+
     for correct in record:
         sv.record_signal_outcome("a", correct, "observer")
     assert sv.accuracy_stable_or_improving("a") is expected
@@ -412,9 +424,12 @@ def test_escalated_signal_cannot_close(sv):
 
     Enter:   sv   fixture
     Exit:    passes if authority and role-switch attempts raise
-             TransitionRefused, the state stays escalated, and the refusal
-             is logged
+             TransitionRefused, the state stays escalated, no closure
+             record is kept, and the refusal is logged
     """
+    # PLAYERS IN THIS SCENE
+    #   closer   "vp" (authority attempt), then "eng" (role-switch attempt)
+
     to_review(sv, "c", by="eng", state=O.OFF_ENVELOPE)
     for closer in ("vp", "eng"):
         with pytest.raises(TransitionRefused):
@@ -436,6 +451,9 @@ def test_resolution_requires_model_update(sv):
     Enter:   sv   fixture
     Exit:    passes if both attempts raise and the review stays unresolved
     """
+    # PLAYERS IN THIS SCENE
+    #   update   a blank model update ("" or whitespace)
+
     to_review(sv, "c", state=O.OFF_ENVELOPE)
     for update in ("", "   "):
         with pytest.raises(TransitionRefused):
@@ -445,8 +463,8 @@ def test_resolution_requires_model_update(sv):
 
 # ===========================================================================
 # SCENE 15 — RECOVERY
-# Proves: line 886, "escalated -> under_review (Rule 8 model update
-# documented)"; after recovery the signal can be closed again.
+# Proves: Commitment State Machine, "escalated -> under_review (Rule 8
+# model update documented)"; after recovery the signal can be closed again.
 # ===========================================================================
 
 def test_resolution_recovers_signals_to_under_review(sv):
@@ -485,6 +503,7 @@ def test_signal_held_by_two_reviews_waits_for_both(sv):
              resolving the second returns it to under_review
     """
     # PLAYERS IN THIS SCENE
+    #   n     member number
     #   ids   review ids, in the order they were opened
 
     for n in (1, 2, 3):
@@ -502,7 +521,7 @@ def test_signal_held_by_two_reviews_waits_for_both(sv):
 
 # ===========================================================================
 # SCENE 17 — NO RECOVERY THROUGH THE SIDE DOOR
-# Proves: line 886, escalated -> under_review is the
+# Proves: Commitment State Machine, escalated -> under_review is the
 # recovery transition "(Rule 8 model update documented)". No other call may
 # take it, and it must not reset what the stability rule measures from.
 # ===========================================================================
@@ -536,7 +555,7 @@ def test_recovery_only_through_model_update(sv, call):
 
 # ===========================================================================
 # SCENE 18 — ONLY UNEARNED DISCOUNTS COUNT
-# Proves: Layer 2, AP-G threshold — "Discounts earned by a declining
+# Proves: Layer 2, Credibility Discounting, AP-G threshold — "Discounts earned by a declining
 # accuracy record do not count toward the threshold." Two discounts made
 # while the record was poor, then two once it improved, are not yet AP-G;
 # the third unearned one is.
@@ -551,7 +570,8 @@ def test_earned_discounts_do_not_count_toward_ap_g(sv):
              unset, and a fifth (the third unearned) sets it
     """
     # PLAYERS IN THIS SCENE
-    #   label   the characterization used each time
+    #   correct   each recorded outcome in turn
+    #   label     the characterization used each time
 
     # --- A poor record: the first two discounts are earned ------------------
     for correct in (False, False):

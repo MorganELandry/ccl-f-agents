@@ -34,8 +34,9 @@ Compliance prerequisites (not enforced in code — must be verified operationall
   3. VPC endpoint for Bedrock to avoid public internet egress
   4. CloudTrail logging enabled for Bedrock API calls
   5. IAM role with least-privilege Bedrock InvokeModel permissions
-  6. PHI scrubbed from evidence_buffer before agent invocation
-     OR evidence_buffer contains only de-identified / coded content
+  6. PHI scrubbed from the text sent to the model (for the advisor, the
+     report text passed to Advisor.propose()) OR that text contains only
+     de-identified / coded content
 
 See COMPLIANCE.md for the full gap analysis.
 

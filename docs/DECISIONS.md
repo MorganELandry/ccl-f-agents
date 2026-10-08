@@ -9,13 +9,13 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
 | ID | Draft says | This runtime | Where |
 |---|---|---|---|
 | **D1** | Rule 7: an escalation threshold for recurrence | **3** members of a recurrence group. Taken from the draft's Challenger account: "the escalation threshold was crossed after the third occurrence." | `Settings.recurrence_threshold` |
-| **D2** | Containment, deferred and ambiguity exits re-enter "when the resolution condition registered at exit is met" (settled in the draft, October 2026) | The runtime cannot observe the condition, so `reenter(..., condition_met=True)` is the re-entering agent's stated claim, logged with the condition it answers. With no condition registered, re-entry is refused and the concern is re-registered as a new linked signal. | `statemachine.reentry_allowed` |
-| **D3** | Coherence score: five factors with provisional weights, a "domain-configured threshold", and no formulas | **Threshold 0.6.** Factor formulas: <ul><li>**open loops:** 1 − (open or locked signals ÷ signals). Trajectory lock counts as open.</li><li>**classification stability:** the share of signals that pass D8.</li><li>**closure quality:** evidence closures ÷ (real closures + reopens); 1.0 when there are neither.</li><li>**recurrence pressure:** 1 − the largest min(1, members ÷ threshold) over the decision's unreviewed groups.</li><li>**authority compression:** 1 − the largest share of all real closures that are one agent's non-evidence closures.</li></ul> | `Supervisor.coherence` |
+| **D2** | Containment, deferred and ambiguity exits re-enter "when the resolution condition registered at exit is met" (settled in the draft, October 2026) | The runtime cannot observe the condition, so `reenter(..., condition_met=True)` is the re-entering agent's stated claim, logged with the condition it answers. With no condition registered, re-entry is refused, and the refusal says to re-register the concern as a new signal linked to the exited one. | `statemachine.reentry_allowed` |
+| **D3** | Coherence score: five factors with provisional weights, a "domain-configured threshold", and no formulas | **Threshold 0.6.** Factor formulas: <ul><li>**open loops:** 1 − (open or locked signals ÷ signals). Trajectory lock counts as open.</li><li>**classification stability:** the share of signals that pass D8.</li><li>**closure quality:** chain-sound evidence closures ÷ (real closures + reopens); 1.0 when there are neither.</li><li>**recurrence pressure:** 1 − the largest min(1, members ÷ threshold) over the decision's unreviewed groups.</li><li>**authority compression:** 1 − the largest share of all real closures that are one agent's non-evidence closures (an evidence closure that is not chain-sound counts as non-evidence); 1.0 with fewer than two real closures.</li></ul> | `Supervisor.coherence` |
 | **D4** | A "minimum evidence closure ratio" for irreversible execution, applied (since October 2026) to the uncertainty, dissent, classification and framing loops only | **0.5** of those loops' real closures, counting only chain-sound evidence closures as evidence. Skipped when there are none. | `Settings.min_evidence_closure_ratio` |
 | **D5** | Escalate when authority closures accumulate on an irreversible decision | Escalate when the count **exceeds 1**, that is, on the second authority closure. Fires once per decision. | `Settings.authority_closure_threshold` |
 | **D6** | AP-G threshold: three, now stated and defended in the draft (Layer 2, AP-G threshold) | **3**. Only unsupported discounts count toward it (`unsupported_discounts`); every discount is still logged and counted in `discounts`. | `Settings.sender_discount_threshold` |
-| **D7** | "Stable or improving accuracy rate", with no formula | With at least two outcomes: later-half accuracy ≥ earlier-half accuracy, and overall accuracy ≥ ½. A single correct outcome also counts. **No record at all means the discount is unsupported**, so it escalates. | `Supervisor.accuracy_stable_or_improving`, `discount_supported_by_record` |
-| **D8** | Rule 3: classification "stabilized" before irreversible execution | Never classified means not stable. Classified but never reviewed means stable. Otherwise, take the classification in force when review opened; the signal is stable if every later classification equals it. Re-confirming the same state is fine. | `Supervisor._classification_stable` |
+| **D7** | "Stable or improving accuracy rate": later recorded outcomes no less accurate than earlier ones; no outcome record means a discount is unsupported (operational definition added October 2026) | With at least two outcomes: later-half accuracy ≥ earlier-half accuracy, and overall accuracy ≥ ½. A single correct outcome also counts. **No record at all means the discount is unsupported**, so it escalates. | `Supervisor.accuracy_stable_or_improving`, `discount_supported_by_record` |
+| **D8** | Rule 3: classification "stabilized" before irreversible execution, defined (October 2026) as no reclassification to a different operational state since review opened | Never classified means not stable. Classified but never reviewed means stable. Otherwise, take the classification in force when review opened; the signal is stable if every later classification equals it. Re-confirming the same state is fine. | `Supervisor._classification_stable` |
 | **D9** | Layer 0 voids for "high-consequence failure modes" | **Constraint and anomaly signals** count as high-consequence. Only voids that can be seen from registered facts are checked: AP-A/AP.1, AP.1b, AP-F/AP.6, AP-G, AP.2. AP.3, AP.4, AP.5 and AP.8 need interviews or document review. | `Signal.high_consequence`, `Supervisor.architecture_check` |
 
 ## Other decisions
@@ -36,7 +36,7 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
 
 ### Layer 0
 
-- **A successor must be someone else.** AP.1b says "a single named steward with no registered successor is a single point of failure". A successor who is the same agent as the steward is treated as the same void. The Alloy model in `verification/` found this gap.
+- **A successor must be someone else.** AP.1b says "a single named steward with no registered successor is a single point of failure". A successor who is the same agent as the steward is treated as the same void. The Alloy model in `verification/` found this gap, and the draft's AP.1b now says so too (October 2026): "A successor who is the same agent or unit as the steward does not satisfy this condition".
 
 ### Escalation
 
@@ -46,7 +46,7 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
 
 ### Exits
 
-- **Exits that leave the loop open.** Nine exit types count as still open for gates and coherence, following the draft's "Loop State After": recoverable, delegated, deferred, forced, exhaustion, boundary, ambiguity, key person and containment.
+- **Exits that leave the loop open.** Nine exit types count as still open (for example in the coherence score and the off-envelope/containment gate check), following the draft's "Loop State After": recoverable, delegated, deferred, forced, exhaustion, boundary, ambiguity, key person and containment. The constraint-and-anomaly gate requirement is stricter: only terminal and superseded exits meet it.
 - **Re-entry by exit type.**
   - **Stated:** recoverable and delegated.
   - **Needs a successor:** forced and key person.
@@ -61,13 +61,13 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
 
 - **Cumulative classes.** The routine requirements apply to every class, and the elevated requirements also apply to irreversible.
 - **Layer 0 voids fail every class.** The draft marks execution gates "Structurally void" when the precondition is not satisfied, so a void blocks routine and elevated decisions too.
-- **"Classification acknowledged"** means every signal has an operational state. **"Open loops documented"** means no signal is still merely registered.
-- **Recurrence groups reviewed** fails only for a group with an unresolved review.
+- **"Classification acknowledged"** means every signal has an operational state. **"Open loops documented"** means no signal is still merely registered. (The draft adopted both readings as operational definitions in October 2026.)
+- **Recurrence groups reviewed** fails only for a group with an unresolved review, as the draft's operational definition now also says.
 - **Unresolved structural reviews block irreversible execution.**
 - **Open off-envelope or containment signals block irreversible execution.** This follows the Key Definitions: off-envelope needs evidence-based classification before irreversible execution, and containment needs independent steward review.
 - **Suppressed signals.** An irreversible request over a suppressed signal escalates first, so the review it opens blocks that same request.
 - **Overrides.**
-  - Every gate failure can be overridden except Rule 4 acceptance.
+  - Every gate failure can be overridden except Rule 4 acceptance and the block on a decision whose class was lowered after a refused request (the draft says this one cannot be overridden).
   - A Layer 0 void can be overridden. It is still reported, and the override log records it.
   - Lock-in latching applies only to constraint and anomaly signals that are under review, the only state the transition table lets move to `trajectory_lock`. Those that fail the gate in any other way (open in another state, or closed without chain-sound evidence) are logged as still open.
   - An elevated override latches nothing.

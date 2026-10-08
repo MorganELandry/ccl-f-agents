@@ -1,7 +1,7 @@
 """
 THE WATCHERS IN THE WINGS
-A Play in One Act and Five Scenes
-=================================
+A Play in One Act and Six Scenes
+================================
 
 PROLOGUE
 --------

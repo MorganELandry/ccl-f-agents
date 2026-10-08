@@ -119,7 +119,7 @@ DIRECTOR = "director"
 # OTHER_TYPES — the "remaining loop types" held to the ratio. FRAMING is
 #   left out of the closure scenes: its authority closure goes through the
 #   separate frame-adoption route (adopt_frame), so a plain attempt_closure
-#   is not a fair way to stage it. See the final report.
+#   is not a fair way to stage it.
 OTHER_TYPES = [SignalType.UNCERTAINTY, SignalType.DISSENT, SignalType.CLASSIFICATION]
 
 # CLOSED_EXITS — exit types whose Loop State After is closed.
@@ -416,6 +416,7 @@ def test_below_ratio_fails_with_ratio_message():
     """
     # PLAYERS IN THIS SCENE
     #   sv, result   as in Scene 5
+    #   sid          each uncertainty signal id
     sv = Supervisor()
     for sid in ("u1", "u2", "u3"):
         to_review(sv, sid, SignalType.UNCERTAINTY)
@@ -772,6 +773,7 @@ def test_acceptance_evidence_from_another_loops_process_is_not_ees():
     """
     # PLAYERS IN THIS SCENE
     #   sv, result   as in Scene 5
+    #   sid          each constraint, exited TERMINAL in turn
     sv = Supervisor()
     to_review(sv, "c1")
     # --- A loop about a different process, built by hand --------------------
@@ -833,6 +835,7 @@ def test_authority_closed_upstream_makes_downstream_not_chain_sound():
     # PLAYERS IN THIS SCENE
     #   sv, result, msgs   as in Scene 5
     #   rec                the downstream closure record
+    #   sig                the downstream Signal "c1"
     sv = Supervisor()
     to_review(sv, "rig")
     sig = to_review(sv, "c1")
@@ -924,6 +927,7 @@ def test_chain_soundness_is_transitive(top_by_evidence):
     """
     # PLAYERS IN THIS SCENE
     #   sv   the Supervisor
+    #   sid  each signal id, put under review in turn
     sv = Supervisor()
     for sid in ("top", "mid", "c1"):
         to_review(sv, sid)
@@ -991,6 +995,7 @@ def test_dependency_cycle_never_counts():
     """
     # PLAYERS IN THIS SCENE
     #   sv   the Supervisor
+    #   sid  each signal id, put under review in turn
     sv = Supervisor()
     for sid in ("x", "y", "z"):
         to_review(sv, sid)

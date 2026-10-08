@@ -22,6 +22,10 @@ The package, module by module:
                    score, execution gates
   advisor.py       the model that only *proposes* (AI Applications)
   graph.py         a LangGraph pipeline that replays events through them
+  observability.py optional OpenTelemetry tracing and metrics (not
+                   re-exported here; import cclf.observability directly)
+  backends/        the LLM backend registry the advisor builds models from
+                   (imported lazily, not re-exported here)
 
 THE PLAYBILL (what happens in this file)
     Scene 1  re-export the public names, and list them in __all__

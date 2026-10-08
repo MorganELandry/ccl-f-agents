@@ -6,13 +6,13 @@ A Play in Twelve Scenes
 PROLOGUE
 --------
 Tests for Supervisor.exit() and Supervisor.reenter(), derived from the CCL-F
-v0.2 Loop Exit Taxonomy (spec lines 522-553) and the exit transitions of
-the Layer 4 state machine (lines 894-933, 944).
+v0.2 Loop Exit Taxonomy (Layer 2) and the exit transitions of the Layer 4
+Commitment State Machine.
 
 The taxonomy has fourteen exit types. Each one says what obligations
 survive the exit and whether the loop may be re-entered:
 
-  Obligations (line 553):
+  Obligations (Loop Exit Taxonomy, Exit obligations):
     terminal, legal, key person   explicit notation of the open loop state
     delegated                     successor registered before the exit is valid
     whistleblower                 external pathway AND the triggering
@@ -20,7 +20,10 @@ survive the exit and whether the loop may be re-entered:
     every type                    an audit trail entry (an unregistered exit
                                   "is structurally equivalent to a suppressed
                                   signal")
-  Re-entry into this automaton's under_review (lines 897-932):
+    containment, deferred,        should register a resolution condition
+      ambiguity                   (see "on condition" below)
+  Re-entry into this automaton's under_review (Commitment State Machine,
+  exit transitions):
     stated      recoverable, delegated
     inferred    forced, exhaustion, boundary, key person
     none        terminal, superseded, timeout
@@ -77,7 +80,10 @@ S = CommitmentState
 X = ExitType
 
 # OBLIGATIONS — for each exit type, the extra exit() arguments that meet the
-#   obligations of line 553 (and a sub-type for legal exits, line 547).
+#   Exit obligations of the Loop Exit Taxonomy (and a sub-type for legal
+#   exits, from the taxonomy's notes on legal exit). Containment, deferred
+#   and ambiguity exits get no resolution condition here, so do_exit()
+#   leaves them with no re-entry path.
 #   Types with no special obligation get an empty dict.
 OBLIGATIONS = {
     X.TERMINAL: {"open_loop_state": "constraint unresolved at exit"},
@@ -90,7 +96,11 @@ OBLIGATIONS = {
 }
 
 # REENTRY_EXPECTED — from the spec listing, whether each type (except legal,
-#   which depends on its sub-type) may return to under_review.
+#   which depends on its sub-type) may return to under_review when exited
+#   by do_exit(). Containment, deferred and ambiguity are False because
+#   do_exit() registers no resolution condition for them (with one, they
+#   re-enter when it is met: Scene 8). Whistleblower is False because it
+#   re-enters through an external jurisdiction, not this automaton.
 REENTRY_EXPECTED = {
     X.RECOVERABLE: True, X.DELEGATED: True,
     X.FORCED: True, X.EXHAUSTION: True, X.BOUNDARY: True, X.KEY_PERSON: True,
@@ -136,7 +146,7 @@ def do_exit(sv, exit_type, by="steward"):
 # ===========================================================================
 # SCENE 1 — EVERY EXIT LEAVES A MARK
 # Proves: all fourteen types exist, each one moves the signal to exited,
-# keeps a typed ExitRecord, and is logged (line 553: "Every exit type
+# keeps a typed ExitRecord, and is logged (Exit obligations: "Every exit type
 # generates audit trail obligations"). (Parametrized.)
 # ===========================================================================
 
@@ -166,7 +176,7 @@ def test_every_exit_type_is_recorded(sv, exit_type):
 
 # ===========================================================================
 # SCENE 2 — SAY WHAT WAS LEFT OPEN
-# Proves: line 553, terminal, legal and key person exits "require explicit
+# Proves: Exit obligations, terminal, legal and key person exits "require explicit
 # notation of the open loop state at the time of exit". (Parametrized.)
 # ===========================================================================
 
@@ -183,6 +193,7 @@ def test_open_loop_state_notation_required(sv, exit_type):
     """
     # PLAYERS IN THIS SCENE
     #   extras   the obligations minus the open-loop-state note
+    #   record   the ExitRecord of the full, successful exit
 
     extras = {k: v for k, v in OBLIGATIONS[exit_type].items() if k != "open_loop_state"}
     with pytest.raises(TransitionRefused):
@@ -194,8 +205,9 @@ def test_open_loop_state_notation_required(sv, exit_type):
 
 # ===========================================================================
 # SCENE 3 — NO HANDOVER WITHOUT AN HEIR
-# Proves: line 553, "Delegated exits require successor registration before
-# the exit is valid"; line 532, "Open — new steward registered".
+# Proves: Exit obligations, "Delegated exits require successor registration
+# before the exit is valid"; the taxonomy table's Loop State After for
+# Delegated, "Open — new steward registered".
 # ===========================================================================
 
 def test_delegated_exit_requires_successor(sv):
@@ -214,7 +226,7 @@ def test_delegated_exit_requires_successor(sv):
 
 # ===========================================================================
 # SCENE 4 — THE WHISTLE AND WHY IT BLEW
-# Proves: line 553, whistleblower exits require "the external escalation
+# Proves: Exit obligations, whistleblower exits require "the external escalation
 # pathway and the suppression event that triggered it" permanently recorded.
 # ===========================================================================
 
@@ -227,8 +239,9 @@ def test_whistleblower_exit_requires_pathway_and_suppression(sv):
              the full exit's EXIT entry carries both
     """
     # PLAYERS IN THIS SCENE
-    #   full   the complete whistleblower obligations
-    #   key    one obligation to leave out
+    #   full      the complete whistleblower obligations
+    #   key       one obligation to leave out
+    #   payload   the EXIT entry's payload for the full exit
 
     full = OBLIGATIONS[X.WHISTLEBLOWER]
     for key in full:
@@ -243,8 +256,9 @@ def test_whistleblower_exit_requires_pathway_and_suppression(sv):
 
 # ===========================================================================
 # SCENE 5 — WHICH KIND OF LAW?
-# Proves: line 547, legal exit "has four sub-types"; the runtime needs to
-# know which one (re-entry depends on it, line 926).
+# Proves: Loop Exit Taxonomy, legal exit "has four sub-types"; the runtime
+# needs to know which one (re-entry depends on it: Commitment State Machine,
+# exited(legal) transition).
 # ===========================================================================
 
 def test_legal_exit_requires_sub_type(sv):
@@ -260,7 +274,7 @@ def test_legal_exit_requires_sub_type(sv):
 
 # ===========================================================================
 # SCENE 6 — YOU CANNOT LEAVE WHAT IS ALREADY SETTLED
-# Proves: line 895, exits leave from "any open state": not from a closed
+# Proves: Commitment State Machine, exits leave from "any open state": not from a closed
 # state, and not twice.
 # ===========================================================================
 
@@ -283,13 +297,16 @@ def test_only_open_signals_can_exit(sv):
 # ===========================================================================
 # SCENE 7 — WHO MAY COME BACK
 # Proves: the re-entry column of the state machine listing for every type
-# except legal (Scene 9). (Parametrized.)
+# except legal (Scene 9), as exited by do_exit(): containment, deferred and
+# ambiguity with no resolution condition (their conditional re-entry is
+# Scene 8). (Parametrized.)
 # ===========================================================================
 
 @pytest.mark.parametrize("exit_type", list(REENTRY_EXPECTED), ids=lambda x: x.value)
 def test_reentry_by_exit_type(sv, exit_type):
     """
-    reenter() succeeds exactly for the types the spec gives a re-entry path.
+    reenter() succeeds exactly for the types the spec gives a re-entry path
+    without a registered resolution condition.
 
     Enter:   sv          fixture
              exit_type   every type except LEGAL
@@ -333,8 +350,12 @@ def test_waiting_exits_reenter_on_their_condition(sv, exit_type, condition, met,
              met         what the re-entering agent states
              returns     whether the signal should come back to review
     Exit:    passes if the outcome matches `returns`; a successful re-entry
-             logs the condition it answered
+             logs the condition it answered; a refusal's message says
+             "new signal" (no condition) or "not yet met" (condition unmet)
     """
+    # PLAYERS IN THIS SCENE
+    #   match   the text the refusal message must contain
+
     sv.exit("c", exit_type, "steward", f"{exit_type.value} exit",
             resolution_condition=condition)
     if returns:
@@ -350,7 +371,7 @@ def test_waiting_exits_reenter_on_their_condition(sv, exit_type, condition, met,
 
 # ===========================================================================
 # SCENE 9 — WHEN THE REGULATOR LIFTS THE HOLD
-# Proves: line 926, "regulatory intervention/investigative hold may resume
+# Proves: Commitment State Machine, "regulatory intervention/investigative hold may resume
 # to under_review when lifted", and not before. (Parametrized.)
 # ===========================================================================
 
@@ -376,7 +397,8 @@ def test_legal_exit_resumes_only_when_lifted(sv, subtype):
 # ===========================================================================
 # SCENE 10 — THE LAW THAT ENDS THE LOOP
 # Proves: a statutory trigger "automatically terminates
-# or transfers the loop" (line 547); it is not a hold that lifts.
+# or transfers the loop" (Loop Exit Taxonomy, legal sub-types); it is not
+# a hold that lifts.
 # ===========================================================================
 
 def test_statutory_trigger_does_not_resume(sv):
@@ -395,7 +417,8 @@ def test_statutory_trigger_does_not_resume(sv):
 # ===========================================================================
 # SCENE 11 — NO RETURN WITHOUT A SUCCESSOR
 # Proves: forced and key-person re-entry is conditioned
-# on "successor steward registered" (lines 916, 920).
+# on "successor steward registered" (Commitment State Machine, exited(forced)
+# and exited(key_person)).
 # ===========================================================================
 
 @pytest.mark.parametrize("exit_type", [X.FORCED, X.KEY_PERSON], ids=lambda x: x.value)

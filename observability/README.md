@@ -27,7 +27,7 @@ Derived from audit entries by `Instrumentor.record_audit_entry`. `run_demo.py` f
 | Metric | Type | Tag | Counted when |
 |---|---|---|---|
 | `cclf.closures` | Counter | `type` (evidence, authority, role_switch, lock_in) | a transition carries a closure type |
-| `cclf.escalations` | Counter | `condition` (one of the nine Layer 2 escalation conditions) | an escalation opens a structural review |
+| `cclf.escalations` | Counter | `condition` (one of the ten Layer 2 escalation conditions) | an escalation opens a structural review |
 | `cclf.gate.outcomes` | Counter | `outcome` (EXECUTION_PERMITTED, EXECUTION_BLOCKED, GATE_OVERRIDE, EXECUTION_REFUSED) | an execution request is decided |
 | `cclf.coherence` | Histogram | | an execution request reports a coherence score |
 

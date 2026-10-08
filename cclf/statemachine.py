@@ -17,8 +17,11 @@ legality depends on the exit type, not only on the state.
 
 Where this fits: these functions only *answer* "is this move legal, and
 why?". They change nothing. The Supervisor (supervisor.py) asks them before
-every state change, logs the answer to the audit trail, and refuses the
-move (TransitionRefused) when the answer is no.
+every state change and refuses the move (TransitionRefused) when the answer
+is no. For check_transition() and reentry_allowed() it also logs the answer
+to the audit trail either way (as the "rule" of a TRANSITION or REENTRY
+entry, or as TRANSITION_REFUSED / REENTRY_REFUSED). An exit_allowed()
+refusal is raised without an audit entry of its own.
 
 THE PLAYBILL (what happens in this file)
     Scene 1  check_transition()  is current -> target in the v0.2 table?
@@ -35,8 +38,9 @@ READER'S NOTE — `import ... as` aliases
 READER'S NOTE — the (allowed, reason) tuple
     Every function here returns a pair like (True, "active analysis opened")
     or (False, "BLOCKED: ..."). Callers unpack it as `ok, reason = ...`.
-    The reason is written into the audit trail either way, so a refused move
-    is as visible as an allowed one.
+    For transitions and re-entries the Supervisor writes the reason into
+    the audit trail either way, so a refused move is as visible as an
+    allowed one (see "Where this fits" above for the exit_allowed case).
 """
 
 # ===========================================================================

@@ -11,20 +11,21 @@ cclf.graph.replay(). The expected outcomes come from what CCL-F v0.2 says
 about each case:
 
   Challenger: seven missions of O-ring erosion closed by authority, "The
-    escalation threshold was crossed after the third occurrence" (Rule 7,
-    line 412); classified nominal "despite O-ring temperatures below
-    anything in the validated test data" (Rule 2, line 312); the framing
-    signal inverted the burden of proof (line 292); the launch was an
-    irreversible decision with open constraint loops (lock-in closure,
-    line 1216).
+    escalation threshold was crossed after the third occurrence" (Layer 1,
+    Rule 7, Cases); classified nominal "despite O-ring temperatures below
+    anything in the validated test data" (Layer 1, Rule 2, Cases); the
+    framing signal inverted the burden of proof (Layer 1, Rule 1); the
+    launch was an irreversible decision with open constraint loops
+    (Key Definitions, Lock-in Closure).
   Therac-25: six overdoses "before the incidents were connected" (Rule 7);
-    the only legally obligated reporter was the manufacturer (AP.6 /
-    AP-F captured channel, lines 211-217, 257).
+    the only legally obligated reporter was the manufacturer (Layer 0, The
+    Eight Sub-Conditions, AP.6 — Reporter Independence; Layer 0, The Eight
+    Void Types, AP-F: Captured Channel).
   MCAS: classified a "minor stability enhancement" (Rule 2); behaved
     differently in different internal documents, never stabilized (Rule 3);
     the AR's standing subordinated to the regulated company (Rule 9).
 
-Every replay must leave an intact audit chain (line 1000).
+Every replay must leave an intact audit chain (Layer 4, Audit Trail).
 
 THE PLAYBILL
     Scene 1   replayed()                         (helper) replay a scenario
@@ -129,7 +130,7 @@ def refused_closures(outcomes):
 # ===========================================================================
 # SCENE 2 — EVERY RECORD HOLDS TOGETHER
 # Proves: each scenario replays end to end and leaves a verifiable audit
-# chain (line 1000). (Parametrized.)
+# chain (Layer 4, Audit Trail). (Parametrized.)
 # ===========================================================================
 
 @pytest.mark.parametrize("name", sorted(SCENARIOS))
@@ -140,6 +141,9 @@ def test_every_scenario_replays_with_intact_chain(name):
     Enter:   name   each scenario name
     Exit:    passes if verify() is (True, "ok") and every event was processed
     """
+    # PLAYERS IN THIS SCENE
+    #   sv, outcomes   the replayed Supervisor and its per-event outcomes
+
     sv, outcomes = replayed(name)
     assert AuditTrail.verify(sv.audit.entries()) == (True, "ok")
     assert len(outcomes) == len(SCENARIOS[name])
@@ -161,6 +165,9 @@ def test_challenger_waivers_refused_after_threshold():
              the FRR signals, those four are escalated, and the first two
              signals are closed_authority
     """
+    # PLAYERS IN THIS SCENE
+    #   sv, outcomes   the Challenger replay's Supervisor and outcomes
+
     sv, outcomes = replayed("challenger")
     assert [s for s in refused_closures(outcomes) if s.startswith("constraint-frr")] \
         == FRR_LATE
@@ -185,6 +192,9 @@ def test_challenger_nominal_classification_refused():
     Exit:    passes if there are six CLASSIFICATION_REJECTED entries, no
              signal is nominal, and cold-oring-no-launch is off_envelope
     """
+    # PLAYERS IN THIS SCENE
+    #   sv   the Challenger replay's Supervisor
+
     sv, _ = replayed("challenger")
     assert len(entries(sv, "CLASSIFICATION_REJECTED")) == 6
     assert all(s.operational_state != OperationalState.NOMINAL for s in sv.signals.values())
@@ -193,9 +203,9 @@ def test_challenger_nominal_classification_refused():
 
 # ===========================================================================
 # SCENE 5 — CHALLENGER: "PROVE IT'S UNSAFE"
-# Proves: line 1212: frame adoption closes the frame by authority and
-# suppresses the displaced uncertainty; the suppression escalates at the
-# execution request (line 517).
+# Proves: (Key Definitions, Framing Signal) frame adoption closes the frame
+# by authority and suppresses the displaced uncertainty; the suppression
+# escalates at the execution request (Layer 2, Escalation Conditions).
 # ===========================================================================
 
 def test_challenger_framing_suppresses_uncertainty():
@@ -205,6 +215,9 @@ def test_challenger_framing_suppresses_uncertainty():
     Enter:   (nothing)
     Exit:    passes if both states hold and SUPPRESSED_BEFORE_EXECUTION was raised
     """
+    # PLAYERS IN THIS SCENE
+    #   sv   the Challenger replay's Supervisor
+
     sv, _ = replayed("challenger")
     assert sv.signals["burden-of-proof-frame"].state == S.CLOSED_AUTHORITY
     assert sv.signals["seal-uncertainty"].state == S.SUPPRESSED
@@ -232,6 +245,9 @@ def test_challenger_launch_blocked_then_overridden():
     #   events     the audit event names in order
     #   blocked    the EXECUTION_BLOCKED entry
     #   override   the GATE_OVERRIDE entry
+    #   sv         the Challenger replay's Supervisor
+    #   failures   the blocked entry's failures, joined with " | "
+    #   needle     each failure text that must appear
 
     sv, _ = replayed("challenger")
     events = sv.audit.events()
@@ -258,7 +274,8 @@ def test_challenger_launch_blocked_then_overridden():
 def test_challenger_open_constraints_are_not_latched():
     """
     Implementation-decision test. The spec's state machine records lock-in
-    as under_review -> trajectory_lock (line 946) and lists no
+    as under_review -> trajectory_lock (Layer 4, Commitment State Machine)
+    and lists no
     escalated -> trajectory_lock transition, yet calls trajectory_lock "a
     permanent marker that the loop remained open at the point irreversible
     execution proceeded". The code latches only signals under review, so in
@@ -274,6 +291,7 @@ def test_challenger_open_constraints_are_not_latched():
     """
     # PLAYERS IN THIS SCENE
     #   olie   the OPEN_LOOP_IRREVERSIBLE_EXECUTION entry
+    #   sv     the Challenger replay's Supervisor
 
     sv, _ = replayed("challenger")
     assert not any(s.state == S.TRAJECTORY_LOCK for s in sv.signals.values())
@@ -288,7 +306,7 @@ def test_challenger_open_constraints_are_not_latched():
 # SCENE 8 — THE OVERRIDES NOBODY COUNTED
 # Proves: both Challenger (three authority closures)
 # and MCAS (two) cross the authority-closure threshold on an irreversible
-# decision (line 514). (Parametrized.)
+# decision (Layer 2, Escalation Conditions). (Parametrized.)
 # ===========================================================================
 
 @pytest.mark.parametrize("name", ["challenger", "mcas"])
@@ -299,6 +317,9 @@ def test_scenario_authority_counts_escalate(name):
     Enter:   name   "challenger" or "mcas"
     Exit:    passes if an AUTHORITY_CLOSURE_COUNT review exists
     """
+    # PLAYERS IN THIS SCENE
+    #   sv   the named scenario's replayed Supervisor
+
     sv, _ = replayed(name)
     assert any(r.condition == E.AUTHORITY_CLOSURE_COUNT for r in sv.reviews)
 
@@ -320,6 +341,7 @@ def test_therac25_closures_refused_after_threshold():
     """
     # PLAYERS IN THIS SCENE
     #   reopens   TRANSITION entries leaving closed_authority
+    #   sv, outcomes   the Therac-25 replay's Supervisor and outcomes
 
     sv, outcomes = replayed("therac25")
     assert refused_closures(outcomes) == [f"overdose-{n}" for n in range(3, 7)]
@@ -345,6 +367,7 @@ def test_therac25_captured_channel_blocks_execution():
     """
     # PLAYERS IN THIS SCENE
     #   blocked   the EXECUTION_BLOCKED entry
+    #   sv        the Therac-25 replay's Supervisor
 
     sv, _ = replayed("therac25")
     [blocked] = entries(sv, "EXECUTION_BLOCKED")
@@ -371,6 +394,7 @@ def test_mcas_unstable_classification_and_captured_channel():
     """
     # PLAYERS IN THIS SCENE
     #   failures   the blocked gate's failures, joined
+    #   sv         the MCAS replay's Supervisor
 
     sv, _ = replayed("mcas")
     assert len(entries(sv, "CLASSIFICATION_REJECTED")) == 2
@@ -381,8 +405,8 @@ def test_mcas_unstable_classification_and_captured_channel():
 
 # ===========================================================================
 # SCENE 12 — MCAS: INTO SERVICE ON AN OVERRIDE
-# Proves: line 1236: proceeding is permitted only with explicit, permanently
-# logged authorization.
+# Proves: (Key Definitions, Open-Loop Irreversible Execution) proceeding is
+# permitted only with explicit, permanently logged authorization.
 # ===========================================================================
 
 def test_mcas_override_is_open_loop_execution():
@@ -393,6 +417,9 @@ def test_mcas_override_is_open_loop_execution():
     Exit:    passes if GATE_OVERRIDE (actor boeing) and
              OPEN_LOOP_IRREVERSIBLE_EXECUTION are logged and it executed
     """
+    # PLAYERS IN THIS SCENE
+    #   sv   the MCAS replay's Supervisor
+
     sv, _ = replayed("mcas")
     assert [e.actor for e in entries(sv, "GATE_OVERRIDE")] == ["boeing"]
     assert len(entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION")) == 1

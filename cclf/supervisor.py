@@ -7,7 +7,7 @@ PROLOGUE
 --------
 The coordination supervisor: CCL-F v0.2 Layer 4 as a running monitor.
 
-The v0.2 spec (Layer 4, "Runtime Realization", ~line 864) describes the
+The v0.2 spec (Layer 4 — Runtime Realization, opening paragraph) describes the
 runtime as "a commitment state machine, a coherence scoring model, execution
 gates, and an immutable audit trail". This file is the piece that holds all
 four together. The Supervisor class owns the signals, evidence, decisions,
@@ -21,8 +21,9 @@ that changes their state. Every operation:
 
 Models (probabilistic automation) may only *propose* through advisor.py;
 their proposals pass through the same rules as anyone else's, and model
-output never counts as evidence (EES; spec Layer 2, ~line 494: "multiple LLM
-instances ... do not constitute independent evidence").
+output never counts as evidence (EES; spec Layer 2, External Evidence
+Source, "What does not qualify": "multiple LLM instances ... do not
+constitute independent evidence").
 
 Where this file sits: types.py defines the vocabulary (signals, states,
 closure types, ...), statemachine.py says which state moves are legal,
@@ -85,7 +86,8 @@ THE PLAYBILL (what happens in this file)
         Scene 4   record_credibility_discount   detect shooting the messenger
     ACT VIII — DECISIONS, COHERENCE AND EXECUTION GATES
         Scene 1   register_decision        create a decision node
-        Scene 1b  reclassify_decision, _reversal_supported, effective_class
+        Scene 1b  _check_evidence_ids, _reversal_supported, _applied_class,
+                  effective_class, reclassify_decision
                                            Execution Class Assignment
         Scene 2   link_signal              attach a signal to a decision
         Scene 3   accept_decision          Rule 4: a single named accepting agent
@@ -134,11 +136,14 @@ READER'S NOTE — Optional and Iterable (from the typing module)
 # reentry_allowed         may an exited signal of this exit type re-enter?
 # types                   the v0.2 vocabulary. Three are given short aliases:
 #                         S = CommitmentState (lifecycle position),
-#                         E = EscalationCondition (the nine Layer 2 triggers),
+#                         E = EscalationCondition (the ten Layer 2 triggers),
 #                         O = OperationalState (the five Rule 2 states).
 #                         EES_ELIGIBLE_KINDS lists the evidence kinds that can
 #                         be an External Evidence Source; CLOSED_STATES is the
-#                         set of the three closed commitment states.
+#                         set of the three closed commitment states;
+#                         RESOLVING_EXITS is the exit types whose Loop State
+#                         After is closed (terminal, superseded), used by the
+#                         irreversible gate (ACT VIII, Scene 7b).
 # ===========================================================================
 
 from __future__ import annotations
@@ -159,53 +164,59 @@ from .types import (
 # ===========================================================================
 # DRAMATIS PERSONAE (every module-level variable, declared here at the top)
 # ---------------------------------------------------------------------------
-# The spec leaves these values open; each one is an IMPLEMENTATION DECISION
-# (labels D1-D6, see docs/DECISIONS.md). They are only the defaults: the
+# The five DEFAULT_ thresholds below are labelled implementation decisions
+# (D1 and D3-D6, see docs/DECISIONS.md). The spec names each threshold; it
+# gives no value for four of them, and since October 2026 it states the
+# AP-G threshold (D6) itself as three. They are only the defaults: the
 # Settings dataclass (ACT I, Scene 2) copies them, and a caller can pass
-# different values per Supervisor.
+# different values per Supervisor. The last three variables are fixed
+# lookup tables taken from the spec.
 # ===========================================================================
 
 # DEFAULT_RECURRENCE_THRESHOLD — how many signals in one recurrence group
 #   trigger the Rule 7 structural review (ACT VI, Scene 3).
-#   Spec: Rule 7 (~line 410) says review is "mandatory and automatic" once a
-#   group "crosses the escalation threshold" but gives no number.
+#   Spec: Rule 7 ("What to do") says review is "mandatory and automatic"
+#   once a group "crosses the escalation threshold" but gives no number.
 #   IMPLEMENTATION DECISION D1: 3, taken from the Challenger case in Rule 7
-#   (~line 412): "The escalation threshold was crossed after the third
+#   ("Cases"): "The escalation threshold was crossed after the third
 #   occurrence."
 DEFAULT_RECURRENCE_THRESHOLD = 3        # D1: Challenger "crossed after the third occurrence"
 
 # DEFAULT_AUTHORITY_CLOSURE_THRESHOLD — the escalation condition "Authority
 #   closure count exceeds threshold on an irreversible decision" (Layer 2,
-#   Escalation Conditions, ~line 514) needs a number.
+#   Escalation Conditions) needs a number.
 #   IMPLEMENTATION DECISION D5: 1, so the second authority closure on an
 #   irreversible decision's signals escalates (the test is "count > 1").
 DEFAULT_AUTHORITY_CLOSURE_THRESHOLD = 1  # D5: escalate when count exceeds this
 
-# DEFAULT_SENDER_DISCOUNT_THRESHOLD — how many credibility discounts against
-#   one agent (whose accuracy is stable or improving) turn into AP-G, the
-#   Sender Discount void. Spec (Layer 2, Credibility Discounting, ~line 478)
-#   sets the threshold as "provisionally mirroring Rule 7's recurrence-group
-#   logic pending empirical calibration".
-#   IMPLEMENTATION DECISION D6: 3, the same number as D1.
-DEFAULT_SENDER_DISCOUNT_THRESHOLD = 3   # D6: "provisionally mirroring Rule 7"
+# DEFAULT_SENDER_DISCOUNT_THRESHOLD — how many unsupported credibility
+#   discounts against one agent (discounts not earned by a poor or
+#   declining accuracy record) turn into AP-G, the Sender Discount void.
+#   Spec (Layer 2, Credibility Discounting, "AP-G threshold"): "The
+#   threshold is three: AP-G is reached at the third credibility-discounting
+#   event against the same registering agent during which that agent's
+#   signals show a stable or improving accuracy rate."
+#   D6: 3, the spec's own number (and the same number as D1).
+DEFAULT_SENDER_DISCOUNT_THRESHOLD = 3   # D6: "The threshold is three"
 
 # DEFAULT_COHERENCE_THRESHOLD — the coherence score below which an
-#   irreversible execution is blocked. Spec (Layer 4, Coherence Score,
-#   ~line 960): "A score below the domain-configured threshold blocks
-#   irreversible execution pending acknowledgment."
+#   irreversible execution is blocked. Spec (Layer 4, Coherence Score):
+#   "A score below the domain-configured threshold blocks irreversible
+#   execution pending acknowledgment."
 #   IMPLEMENTATION DECISION D3: default 0.6.
 DEFAULT_COHERENCE_THRESHOLD = 0.6       # D3: "domain-configured threshold"
 
-# DEFAULT_MIN_EVIDENCE_CLOSURE_RATIO — the share of real closures that must be
-#   evidence closures before an irreversible execution. Spec (Layer 4,
-#   Execution Gates, ~line 992) requires a "minimum evidence closure ratio"
-#   but gives no value.
+# DEFAULT_MIN_EVIDENCE_CLOSURE_RATIO — the share of the real closures of a
+#   decision's uncertainty, dissent, classification and framing signals that
+#   must be chain-sound evidence closures before an irreversible execution.
+#   Spec (Layer 4, Execution Gates) requires a "minimum evidence closure
+#   ratio" for those loop types but gives no value.
 #   IMPLEMENTATION DECISION D4: 0.5.
 DEFAULT_MIN_EVIDENCE_CLOSURE_RATIO = 0.5  # D4: "minimum evidence closure ratio"
 
 # COHERENCE_WEIGHTS — factor name -> weight for the coherence score
 #   (ACT VIII, Scene 6). The five factors and their weights are copied from
-#   the spec's table (Layer 4, Coherence Score, ~lines 952-958), which calls
+#   the spec's table (Layer 4, Coherence Score), which calls
 #   them "provisional and illustrative". The weights add up to 1.0, so a
 #   score built from factors in [0, 1] also lies in [0, 1]. How each factor
 #   is computed is not in the spec (IMPLEMENTATION DECISION D3).
@@ -225,7 +236,7 @@ CLASS_RANK = {ExecutionClass.ROUTINE: 0, ExecutionClass.ELEVATED: 1,
 
 # EXIT_TYPES_REQUIRING_OPEN_STATE_NOTE — the exit types that must record the
 #   open loop state at the time of exit. Spec (Layer 2, Loop Exit Taxonomy,
-#   "Exit obligations", ~line 553): "Terminal, legal, and key person exits
+#   "Exit obligations"): "Terminal, legal, and key person exits
 #   require explicit notation of the open loop state at the time of exit."
 #   Used by exit() (ACT V, Scene 4).
 #   A frozenset is a set that cannot be changed after it is built; that
@@ -251,9 +262,9 @@ class TransitionRefused(Exception):
 
     No signal, evidence, decision or review was changed by the refused
     step. Depending on where the refusal happens, the logical clock may
-    already have ticked and an audit entry (TRANSITION_REFUSED or
-    REENTRY_REFUSED) may already have been written; add_evidence() can also
-    refuse partway through (see ACT II, Scene 4).
+    already have ticked, an audit entry (TRANSITION_REFUSED or
+    REENTRY_REFUSED) may already have been written, and a refused real
+    closure has already used up a closure record number (ACT IV, Scene 2).
 
     READER'S NOTE — custom exceptions
         A class that inherits from Exception is a new kind of error. It
@@ -274,9 +285,9 @@ class Settings:
     """
     The tunable thresholds, one Supervisor at a time.
 
-    Each default comes from the DRAMATIS PERSONAE above (all are
-    implementation decisions D1, D3-D6; the spec names the thresholds but
-    does not set their values).
+    Each default comes from the DRAMATIS PERSONAE above (labelled
+    implementation decisions D1, D3-D6; the spec names the thresholds and
+    sets a value only for the AP-G threshold, three, which D6 follows).
 
     READER'S NOTE — dataclasses
         @dataclass writes the boring parts of a class for you. From the
@@ -302,16 +313,16 @@ class StructuralReview:
     """
     An automatic escalation to structural review (Layer 2).
 
-    Spec: Layer 2, Escalation Conditions (~line 510): "The following
-    conditions automatically escalate to structural review". Rule 7
-    (~line 410) fires the review; Rule 8 (~line 422) says what it must
-    produce: "a documented update to the coordination model — not a
-    re-approval of existing practice". `model_update` holds that update once
+    Spec: Layer 2, Escalation Conditions: "The following conditions
+    automatically escalate to structural review". Rule 7 fires the review;
+    Rule 8 ("Why it matters") says what it must produce: "a documented
+    update to the coordination model — not a re-approval of existing
+    practice". `model_update` holds that update once
     resolve_review() (ACT VI, Scene 5) closes the review.
 
     Fields:
         review_id     "R1", "R2", ... in order of opening
-        condition     which of the nine escalation conditions fired
+        condition     which of the ten escalation conditions fired
         scope         what the review is about: a signal id, "group:<id>",
                       "agent:<id>" or "decision:<id>"
         detail        human-readable description of why it fired
@@ -368,8 +379,9 @@ class GateResult:
         execution_class    irreversible, elevated or routine
         permitted          True if execution may go ahead (cleanly or by override)
         overridden         True if it went ahead only because of an override
-        architecture_void  True if a Layer 0 void was found: the spec (~line 268)
-                           calls the gates "structurally void" in that case
+        architecture_void  True if a Layer 0 void was found: the spec (Layer 0,
+                           Why This Matters) calls the gates "structurally
+                           void" in that case
         failures           every gate requirement that was not met
         coherence          the decision's coherence score at request time
         locked_signals     constraint signals latched into trajectory_lock by
@@ -401,16 +413,20 @@ class Supervisor:
     """
     CCL-F v0.2 Layer 4 supervisor.
 
-    Spec (Layer 4, ~line 868): "its controller is the discrete-event
-    supervisory automaton ... The commitment state machine is the
-    supervisor's automaton — its blocked transitions are the supervisor's
-    forbidden-event set, enforced structurally rather than by convention.
-    Execution gates are the supervisor's interlock logic on irreversible
-    actuation."
+    Spec (Layer 4 — Runtime Realization, opening section): "its controller
+    is the discrete-event supervisory automaton ... The commitment state
+    machine is the supervisor's automaton — its blocked transitions are the
+    supervisor's forbidden-event set, enforced structurally rather than by
+    convention. Execution gates are the supervisor's interlock logic on
+    irreversible actuation."
 
-    Every public method takes the acting agent's identity (`by`, or
-    `registered_by`), refuses with TransitionRefused when a rule is broken,
-    and writes what it did to `self.audit`.
+    Every public method that changes state takes the acting agent's
+    identity (`by`, or `registered_by`), refuses with TransitionRefused when
+    a rule is broken, and writes what it did to `self.audit`. The read-only
+    queries (is_novel, is_ees, chain_sound, effective_class, coherence,
+    architecture_check, accuracy_stable_or_improving,
+    discount_supported_by_record, open_reviews, summary) take no actor and
+    write nothing.
     """
 
     # =======================================================================
@@ -428,7 +444,10 @@ class Supervisor:
                                 (default: an empty Architecture())
         Exit:    a Supervisor with no signals, evidence, decisions or reviews
 
-        Records it keeps (all start empty):
+        Attributes it sets:
+            settings              the thresholds in use
+            architecture          the registered Layer 0 architecture
+        Records it keeps (all start empty, or at 0):
             audit                 the append-only, hash-chained audit trail
             signals               signal id -> Signal
             evidence              evidence id -> Evidence
@@ -437,6 +456,10 @@ class Supervisor:
             reviewed_groups       recurrence groups whose Rule 7 review was resolved
             accuracy              agent -> list of True/False signal outcomes (AP.7)
             discounts             agent -> number of credibility discounts recorded
+                                  (all of them, supported or not)
+            unsupported_discounts agent -> number of discounts NOT supported by
+                                  the agent's record; only these count toward
+                                  AP-G (D6)
             sender_discount_void  agents now under AP-G (Sender Discount)
             clock                 the logical clock (see the module READER'S NOTE)
             _closure_seq          counter for closure record ids "C1", "C2", ...
@@ -495,7 +518,7 @@ class Supervisor:
                  **payload  any extra named details to store with it
         Exit:    None; the entry is appended to self.audit
 
-        Spec: Layer 4, Audit Trail (~line 1000): "Every state transition is
+        Spec: Layer 4, Audit Trail: "Every state transition is
         append-only and immutable ... The record cannot be revised after the
         fact — only extended." AuditTrail (audit.py) enforces that.
 
@@ -520,9 +543,9 @@ class Supervisor:
         Exit:    None, or raises TransitionRefused if `by` is empty/blank
 
         Why: the spec's audit obligations (e.g. overrides "permanently logged
-        with the agent's identity", ~line 996; reopens logged with "the
-        identity of the reopening agent", ~line 940) mean nothing without an
-        identity.
+        with the agent's identity", Layer 4, Execution Gates; reopens logged
+        with "the identity of the reopening agent", Layer 4, Commitment State
+        Machine) mean nothing without an identity.
 
         READER'S NOTE — @staticmethod
             A static method does not receive `self`; it is a plain function
@@ -584,7 +607,7 @@ class Supervisor:
                  If the move is not in the v0.2 table, a TRANSITION_REFUSED
                  entry is written and TransitionRefused is raised.
 
-        Spec: Layer 4, Commitment State Machine (~lines 872-946): "certain
+        Spec: Layer 4, Commitment State Machine: "certain
         transitions are blocked regardless of organizational pressure."
         check_transition() (statemachine.py) holds the table and the four
         named blocked transitions. Almost every state change in this file
@@ -631,7 +654,7 @@ class Supervisor:
                  sig   the signal it is offered against
         Exit:    True if the evidence is new relative to the signal
 
-        Spec: Layer 2, Evidence Novelty Requirement (~line 484):
+        Spec: Layer 2, Evidence Novelty Requirement:
         "Evidence-based closure requires that the closing evidence was not
         present when the signal was registered. Restating existing analysis
         in more confident language does not constitute new evidence." Why:
@@ -660,7 +683,7 @@ class Supervisor:
                  sig   the signal it is offered against
         Exit:    True if the evidence counts as an External Evidence Source
 
-        Spec: Layer 2, External Evidence Source (~lines 486-498). A source
+        Spec: Layer 2, External Evidence Source (EES). A source
         is an EES "only if the source's output is causally independent of
         the reasoning process that produced the signal being evaluated."
         What qualifies: "Independent formal or symbolic verification,
@@ -792,7 +815,7 @@ class Supervisor:
         Exit:    None; self.architecture is replaced and the full content
                  is logged as ARCHITECTURE_REGISTERED
 
-        Spec: Layer 0, the Architecture Precondition (~lines 161-268). These
+        Spec: Layer 0, the Architecture Precondition. These
         are the facts architecture_check() (ACT VIII, Scene 7) reads.
         """
         self._require_actor(by)
@@ -892,7 +915,8 @@ class Supervisor:
         Register a new coordination signal.
 
         Enter:   signal_id          unique id
-                 signal_type        one of the six types (Rule 1, ~line 292)
+                 signal_type        one of the six types (Rule 1, "How it
+                                    fails")
                  description        what the signal says
                  registered_by      the registering agent (also the actor)
                  referent           the R5.3 referent it was raised from:
@@ -912,8 +936,8 @@ class Supervisor:
                  id is already used
 
         Spec: Layer 4 state machine, "unregistered -> registered (signal
-        enters the system)" (~line 875). Rule 1 (~line 288) is why signals
-        are registered at all: "Safety-relevant signals must remain
+        enters the system)". Rule 1 ("What it requires") is why signals are
+        registered at all: "Safety-relevant signals must remain
         operationally visible through the full commitment process."
         """
         # PLAYERS IN THIS SCENE
@@ -959,14 +983,15 @@ class Supervisor:
 
         Enter:   signal_id          the signal to classify
                  state              the proposed operational state (one of
-                                    the five in Key Definitions, ~line 1186)
+                                    the five in Key Definitions, Operational
+                                    State)
                  by                 the classifying agent
                  evidence_ids       evidence cited in support
                  proposed_by_model  True if a model proposed this (advisor.py);
                                     recorded, and given no extra weight
         Exit:    the operational state actually applied
 
-        Spec: Rule 2 (~lines 302-310): "Every execution-class decision
+        Spec: Rule 2, Classification Precedes Action: "Every execution-class decision
         requires explicit operational state classification. Unvalidated
         conditions cannot be classified as nominal ... Classification must
         be supported by evidence, not assumed." Why: a misclassified state
@@ -988,8 +1013,8 @@ class Supervisor:
           - every classification is appended to classification_history,
             which _classification_stable() (ACT VIII, Scene 5) reads
           - off_envelope or containment escalates to structural review
-            (Layer 2, Escalation Conditions, ~line 513: "Operational state
-            classified as off-envelope or containment")
+            (Layer 2, Escalation Conditions: "Operational state classified
+            as off-envelope or containment")
         """
         # PLAYERS IN THIS SCENE
         #   sig       the signal being classified
@@ -1050,7 +1075,7 @@ class Supervisor:
                  TransitionRefused with a hint at the right route otherwise
 
         Spec: Layer 4 state machine, "classified -> under_review (active
-        analysis opened)" (~line 877). Recording `review_opened_at` matters
+        analysis opened)". Recording `review_opened_at` matters
         for classification stability (ACT VIII, Scene 5).
         """
         # PLAYERS IN THIS SCENE
@@ -1110,7 +1135,7 @@ class Supervisor:
                  rationale      the closer's stated reason
         Exit:    the ClosureRecord (see _apply_closure for the effects)
 
-        The closure types (Layer 2, Closure Quality, ~lines 457-468):
+        The closure types (Layer 2, Closure Quality):
           Evidence closure      "New data or analysis resolves the
                                 constraint" — Valid.
           Authority closure     "A senior agent overrides without new
@@ -1120,23 +1145,24 @@ class Supervisor:
           (Lock-in closure is created only by a gate override; see ACT VIII,
           Scene 8.)
         Why the spec types closures: Layer 2 exists to tell "whether a loop
-        actually closed, or was merely recorded as closed" (~line 451).
-        Flagged closures are not blocked; they are permanently recorded as
-        what they are.
+        actually closed, or was merely recorded as closed" (Layer 2,
+        opening paragraph). Flagged closures are not blocked; they are
+        permanently recorded as what they are.
 
         Evidence closure needs both tests: "The two requirements are jointly
-        necessary and independently insufficient" (EES, ~line 498).
+        necessary and independently insufficient" (EES, "Relationship to
+        Evidence Novelty").
 
         IMPLEMENTATION DECISION (role-switch detected by referent change):
-        the spec's defining test (Key Definitions, Role-Switch Closure,
-        ~line 1214) is "did the agent close the signal by consulting a
-        different referent than the one that generated it, without that
-        referent supplying anything new". The code checks this as: the
+        the spec's defining test (Key Definitions, Role-Switch Closure) is
+        "did the agent close the signal by consulting a different referent
+        than the one that generated it, without that referent supplying
+        anything new". The code checks this as: the
         closer is the registrant, the `referent` passed in differs from the
         referent recorded at registration, and no evidence qualified. It
         relies on the caller stating the referent honestly.
 
-        The fallback to authority closure: the EES principle (~line 492)
+        The fallback to authority closure: the EES "Principle" paragraph
         says a closure without an EES is "authority closure, role-switch
         closure, or false closure depending on its other features". Here
         every closure that is neither evidence nor role-switch is typed
@@ -1194,7 +1220,7 @@ class Supervisor:
                  under_review) and escalation checks run. For an attempted
                  closure: only an ATTEMPTED_CLOSURE entry is written.
 
-        Spec: Autonomy-Bounded Closure (~lines 563-575). "Closure authority
+        Spec: Layer 3, Autonomy-Bounded Closure. "Closure authority
         is bounded by agent autonomy ... Beyond that boundary, closure can
         be attempted but not enforced." Attempted Closure "is recorded as a
         coordination event but does not constitute loop resolution. It is
@@ -1208,10 +1234,16 @@ class Supervisor:
         closers as attempting.
 
         After a real closure, two escalation conditions are checked (Layer 2,
-        Escalation Conditions, ~lines 514-515):
+        Escalation Conditions):
           - "Role-switch closure detected on a safety-constraint signal"
           - "Authority closure count exceeds threshold on an irreversible
-            decision", for every decision that includes this signal
+            decision", for every decision that includes this signal (only
+            decisions whose applied class is irreversible are counted; see
+            ACT VI, Scene 4)
+
+        If the signal is not under_review, _move refuses the real closure
+        after the closure counter has already advanced; nothing else
+        changes.
         """
         # PLAYERS IN THIS SCENE
         #   signal_id   the signal's id (short name)
@@ -1280,11 +1312,11 @@ class Supervisor:
                  signals that were under_review are suppressed; if any of
                  them is a constraint signal, a structural review opens.
 
-        Spec: Key Definitions, Framing Signal (~line 1212), and Rule 1
-        (~line 292): a framing signal "shift[s] how other signals are
-        understood"; Rule 1's "What to do" (~line 296): "Track whether a
-        framing signal has displaced a technical signal's standing, and flag
-        this as a suppression event." Escalation condition (~line 518):
+        Spec: Key Definitions, Framing Signal, and Rule 1 ("How it fails"):
+        a framing signal "shift[s] how other signals are understood";
+        Rule 1's "What to do": "Track whether a framing signal has displaced
+        a technical signal's standing, and flag this as a suppression
+        event." Escalation condition (Layer 2, Escalation Conditions):
         "Framing signal achieves frame adoption while technical constraint
         signals remain open." Why: this is how "prove it's unsafe" replaced
         "prove it's safe" at Challenger.
@@ -1343,11 +1375,12 @@ class Supervisor:
                  to its suppression_events
 
         Spec: Layer 4 state machine, "under_review -> suppressed (signal
-        lost operational visibility)" (~line 881). Suppression is the Rule 1
-        failure made visible: "present in the record but absent from the
-        decision" (~line 290). Suppression events are kept permanently
-        ("suppression permanent", ~line 887). A suppressed signal cannot be
-        closed directly (blocked transition, ~line 939).
+        lost operational visibility)". Suppression is the Rule 1 failure
+        made visible: "present in the record but absent from the decision"
+        (Rule 1, "How it fails"). Suppression events are kept permanently
+        ("suppression permanent", Layer 4 recovery transitions). A
+        suppressed signal cannot be closed directly (Layer 4, Commitment
+        State Machine, blocked transitions).
         """
         # PLAYERS IN THIS SCENE
         #   sig   the signal
@@ -1375,7 +1408,7 @@ class Supervisor:
                  if the signal is not suppressed
 
         Spec: Layer 4 recovery transition, "suppressed -> under_review
-        (re-entry logged; suppression permanent)" (~line 887). The audit
+        (re-entry logged; suppression permanent)". The audit
         entry carries the full list of past suppression events, so the
         suppression is not erased by the re-entry.
 
@@ -1413,13 +1446,16 @@ class Supervisor:
                  by          the reopening agent
                  rationale   required; why it is reopened
         Exit:    None; the signal is under_review again (or escalated if an
-                 unresolved review names it), reopen_count goes up by one and
-                 review_opened_at is reset
+                 unresolved review names it), reopen_count goes up by one,
+                 review_opened_at is reset, and a CHAIN_WEAKENED entry is
+                 logged for every other signal whose closure was chain-sound
+                 before the reopen and is not after it (Layer 2, Closure
+                 Chain)
 
-        Spec: Layer 4, blocked transitions (~line 940), quoted above; the
-        reopen transitions (~lines 889-892), including "closed_role_switch
+        Spec: Layer 4, Commitment State Machine: the blocked transitions,
+        quoted above; the reopen transitions, including "closed_role_switch
         -> under_review (mandatory independent review; L2 flag)". Why
-        closed states can be reopened at all (~line 942): "a state machine
+        closed states can be reopened at all (same section): "a state machine
         in which closure is irreversible cannot express the framework's own
         core diagnostic", false closure. The reopen history "feeds ...
         the coherence score" (see closure_quality in ACT VIII, Scene 6).
@@ -1500,12 +1536,16 @@ class Supervisor:
         Exit:    the ExitRecord; the signal is `exited`. Delegated exits make
                  `successor` the signal's steward.
 
-        Spec: Layer 2, Loop Exit Taxonomy (~lines 522-553) and Layer 4
-        "any open state -> exited(type)" (~line 895). Why: "An unregistered
+        Spec: Layer 2, Loop Exit Taxonomy and Layer 4 (Commitment State
+        Machine) "any open state -> exited(type)". Why: "An unregistered
         exit is structurally equivalent to a suppressed signal — the loop
         disappears from active monitoring while the hazard it named may
         persist." The obligations checked here are the spec's "Exit
-        obligations" (~line 553) and the four legal sub-types (~line 547).
+        obligations" and the four legal sub-types ("Notes on specific exit
+        types"), both in the Loop Exit Taxonomy. For containment, deferred
+        and ambiguity exits the spec says they "should register a
+        resolution condition"; that is not enforced here, but without one
+        reenter() refuses them.
 
         This changes sig.state directly rather than through _move(): the
         transition table in statemachine.py does not hold exits, and
@@ -1547,7 +1587,8 @@ class Supervisor:
         previous = sig.state
         sig.state = S.EXITED
         sig.exit = record
-        # Delegated: "loop remains open under new stewardship" (~line 532).
+        # Delegated: "loop remains open under new stewardship" (Loop Exit
+        # Taxonomy).
         if exit_type == ExitType.DELEGATED:
             sig.steward = successor
         self._log("EXIT", by, signal=signal_id, exit_type=exit_type, **{"from": previous},
@@ -1585,7 +1626,7 @@ class Supervisor:
                  unresolved review names it); refusals of the re-entry rule
                  itself are logged as REENTRY_REFUSED
 
-        Spec: Layer 4 exit transitions (~lines 897-932). Stated re-entries:
+        Spec: Layer 4 exit transitions (Commitment State Machine). Stated re-entries:
         recoverable and delegated. Inferred re-entries (flagged by the spec
         itself as inference): forced and key person need "successor steward
         registered, inferred from AP.1b"; exhaustion; boundary needs a
@@ -1659,7 +1700,7 @@ class Supervisor:
     def _escalate(self, condition: E, scope: str, detail: str,
                   signal_ids: list[str], actor: str) -> StructuralReview:
         """
-        Open a structural review for one of the nine escalation conditions.
+        Open a structural review for one of the ten escalation conditions.
 
         Enter:   condition    which escalation condition fired
                  scope        what it is about (see StructuralReview.scope)
@@ -1668,20 +1709,22 @@ class Supervisor:
                  actor        the agent whose operation triggered it
         Exit:    the StructuralReview (new, or the existing open one)
 
-        Spec: Layer 2, Escalation Conditions (~lines 508-520): these
-        "automatically escalate to structural review". Rule 7 (~line 410):
-        "mandatory and automatic — not a judgment call subject to schedule
-        pressure or institutional momentum." Layer 4 state machine:
-        "under_review -> escalated" (~line 882).
+        Spec: Layer 2, Escalation Conditions: these "automatically escalate
+        to structural review". Rule 7 ("What to do"): "mandatory and
+        automatic — not a judgment call subject to schedule pressure or
+        institutional momentum." Layer 4 state machine: "under_review ->
+        escalated".
 
         IMPLEMENTATION DECISION (one open review per condition and scope):
         if an unresolved review already exists for the same condition and
         scope, the new signals are added to it and no new review or
-        ESCALATION entry is created.
+        ESCALATION entry is created. In that case no signal is moved now,
+        even one that is under_review: a newly added signal is escalated
+        only when it next enters review (ACT VI, Scene 2).
 
-        Only signals currently under_review are moved to `escalated` now.
-        Others named by the review are escalated when they reach review
-        (ACT VI, Scene 2).
+        For a new review, only the named signals currently under_review are
+        moved to `escalated` now. Others named by the review are escalated
+        when they reach review (ACT VI, Scene 2).
         """
         # PLAYERS IN THIS SCENE
         #   existing   each review already on file
@@ -1755,12 +1798,13 @@ class Supervisor:
         Exit:    None; may open a RECURRENCE_THRESHOLD review on
                  "group:<id>", or add the signal to the one already open
 
-        Spec: Rule 7 (~lines 402-412): "Recurrence is structural evidence
+        Spec: Rule 7, Recurring Coordination Failures Trigger Structural
+        Review: "Recurrence is structural evidence
         ... When a recurrence group crosses the escalation threshold,
         structural review is mandatory and automatic." Why: each recurrence
         "closed by authority" separately means "the pattern never
         accumulates into a recognized signal" (seven Challenger O-ring
-        erosion missions). Recurrence Group (Key Definitions, ~line 1230):
+        erosion missions). Recurrence Group (Key Definitions):
         "linked coordination signals sharing a common failure mode".
         Threshold: D1 (Settings.recurrence_threshold, default 3). The test
         is "members >= threshold", so the third member triggers it.
@@ -1803,18 +1847,22 @@ class Supervisor:
     def _check_authority_count(self, d: Decision, actor: str) -> None:
         """
         Escalation condition: authority closure count exceeds the threshold on
-        an irreversible decision. Checked whenever a closure happens and
-        whenever a decision gains signals, so the order of events does not
-        matter.
+        an irreversible decision. Checked whenever an authority closure
+        happens, when a decision is registered, and whenever a decision
+        gains signals, so the order of events does not matter.
 
         Enter:   d       a decision
                  actor   the agent whose operation triggered the check
         Exit:    None; may open an AUTHORITY_CLOSURE_COUNT review on
                  "decision:<id>" (with no signals held)
 
-        Spec: Layer 2, Escalation Conditions (~line 514). Why: rising
-        authority closure frequency is an observable indicator of lock-in
-        pressure (Key Definitions, ~line 1218), and Rule 7 names authority
+        "Irreversible" here is the APPLIED class (_applied_class, ACT VIII,
+        Scene 1b): a decision declared elevated or routine without a tested
+        reversal path is counted too.
+
+        Spec: Layer 2, Escalation Conditions. Why: rising authority closure
+        frequency is an observable indicator of lock-in pressure (Key
+        Definitions, Lock-in Pressure), and Rule 7 names authority
         closure of recurring anomalies as "the organizational signature of a
         system adapting to incoherence". Threshold: D5 (default 1, so the
         second authority closure triggers it).
@@ -1863,12 +1911,12 @@ class Supervisor:
                  group as reviewed, and named escalated signals that no
                  other open review holds return to under_review
 
-        Spec: Rule 8 (~lines 416-429): "Rule 8 requires that the review
+        Spec: Rule 8, Systems Should Update Through Stress: "Rule 8 requires that the review
         produce a documented update to the coordination model — not a
         re-approval of existing practice." Why: otherwise the organization
         "learns the wrong lesson" (normalization of deviance). Layer 4
         recovery transition: "escalated -> under_review (Rule 8 model
-        update documented)" (~line 886).
+        update documented)".
 
         The runtime can only check that an update was written down, not
         that it is a real change rather than a re-approval in other words.
@@ -1932,7 +1980,7 @@ class Supervisor:
                  signal_id   the signal, if known (logged only)
         Exit:    None; the outcome is appended to self.accuracy[agent]
 
-        Spec: AP.7 Source Standing (~line 229): "Track the correlation
+        Spec: Layer 0, AP.7 Source Standing ("What to do"): "Track the correlation
         between a registering agent's contemporaneous characterization ...
         and that agent's actual signal accuracy, measured independently."
         This is the accuracy half of that comparison.
@@ -1960,9 +2008,18 @@ class Supervisor:
                  False with no record at all
 
         Spec: the phrase "stable or improving accuracy rate" appears in the
-        credibility discounting escalation conditions (~line 519) and in
-        AP.7 (~line 229), with no formula. The formula below is the
-        IMPLEMENTATION DECISION D7.
+        credibility discounting escalation condition (Layer 2, Escalation
+        Conditions) and in AP.7 ("What to do"). Since October 2026 the spec
+        gives it an operational definition (Layer 4, Execution Gates,
+        "Operational definitions"): "the agent's accuracy over their later
+        recorded outcomes is no lower than over their earlier ones. An agent
+        with no outcome record has no accuracy rate against which a discount
+        could be earned". The formula below is the IMPLEMENTATION DECISION
+        D7. Its later-half >= earlier-half test and its False for no record
+        match that definition; the extra condition (overall accuracy at
+        least one half) and the single-outcome rule are this project's own
+        additions, not in the spec's definition (so an agent whose later
+        accuracy holds steady below one half counts here as not stable).
 
         Worked example: [False, True, True, True] -> early half [F, T] = 0.5,
         late half [T, T] = 1.0, overall 0.75 -> True.
@@ -2001,7 +2058,7 @@ class Supervisor:
         Enter:   agent   the discounted agent
         Exit:    True only if there is a record and it is not stable/improving
 
-        Spec: AP.7 (~line 229): "Where negative characterization tracks
+        Spec: AP.7 ("What to do"): "Where negative characterization tracks
         accurately with genuinely poor signal quality, no void exists."
         """
         return bool(self.accuracy.get(agent)) and not self.accuracy_stable_or_improving(agent)
@@ -2015,9 +2072,11 @@ class Supervisor:
                                     signal_id: Optional[str] = None) -> None:
         """
         A registering agent is characterized instead of their signal being
-        evaluated. Escalates when the agent's accuracy is stable or improving;
-        repeated discounting at threshold is AP-G, a Layer 0 void for that
-        sender's signals.
+        evaluated. Escalates unless the discount is supported by the agent's
+        record (a record that exists and is not stable/improving), so a
+        discount against an agent with no record escalates too; repeated
+        unsupported discounting at threshold is AP-G, a Layer 0 void for
+        that sender's signals.
 
         Enter:   target             the agent being characterized
                  by                 the agent doing it (as recorded)
@@ -2029,22 +2088,25 @@ class Supervisor:
                  D6 threshold the agent is also put under AP-G and a
                  SENDER_DISCOUNT_RECURRENCE review opens.
 
-        Spec: Layer 2, Credibility Discounting (~lines 470-480): it
-        "operates not on the signal ... but on the standing of the agent who
-        registered it", relocating the question "from 'is this true' to 'is
-        this person a problem'". It is not a closure type. Escalation
-        conditions (~lines 519-520): discounting against an agent whose
-        accuracy is "stable or improving", and its recurrence (AP-G). AP-G
-        (Layer 0, ~line 259; Key Definitions ~line 1202) makes evaluation of
-        that agent's future signals "not meaningful until the channel is
-        repaired"; architecture_check() reports it as a void.
+        Spec: Layer 2, Credibility Discounting: it "operates not on the
+        signal ... but on the standing of the agent who registered it",
+        relocating the question "from 'is this true' to 'is this person a
+        problem'". It is not a closure type. Escalation conditions (Layer 2,
+        Escalation Conditions): discounting against an agent whose accuracy
+        is "stable or improving", and its recurrence (AP-G). AP-G (Layer 0,
+        The Eight Void Types, AP-G: Sender Discount; Key Definitions, Sender
+        Discount (AP-G)) makes evaluation of that agent's future signals "not
+        meaningful until the channel is repaired"; architecture_check()
+        reports it as a void.
 
         Counting: every discount is counted in `discounts` and logged, but
-        only unsupported ones count toward AP-G ("Discounts earned by a
-        declining accuracy record do not count toward the threshold",
-        Layer 2, AP-G threshold). The threshold is three (D6, now stated in
-        the draft); the test is "unsupported count >= 3". AP-G is entered
-        once per agent; nothing in this file removes an agent from it.
+        only unsupported ones count toward AP-G, in `unsupported_discounts`
+        ("Discounts earned by a declining accuracy record do not count
+        toward the threshold", Layer 2, Credibility Discounting, "AP-G
+        threshold"). The spec states the threshold as three; here it is
+        Settings.sender_discount_threshold (D6, default 3), and the test is
+        "unsupported count >= threshold". AP-G is entered once per agent;
+        nothing in this file removes an agent from it.
         """
         # PLAYERS IN THIS SCENE
         #   affected   [signal_id] if a signal was named, else []
@@ -2097,14 +2159,16 @@ class Supervisor:
         Enter:   decision_id       the decision's id
                  description       what is being decided
                  execution_class   irreversible, elevated or routine
-                                   (Layer 4, Execution Gates, ~line 990)
+                                   (Layer 4, Execution Gates)
                  signal_ids        the signals the decision depends on
                  by                the registering agent
                  reversal_path     how its effects could be undone (needed for
                                    a declared class below irreversible to apply)
                  reversal_evidence_ids  evidence that the path was tested
-        Exit:    the new Decision (not yet accepted or executed); an unknown
-                 evidence id is refused and nothing is registered
+        Exit:    the new Decision (not yet accepted or executed); logs
+                 DECISION_REGISTERED with both the declared and the applied
+                 class. A used decision id or an unknown evidence id is
+                 refused and nothing is registered.
 
         The declared class is stored as given. Whether it APPLIES is decided
         when needed by effective_class(): "Every execution-class decision is
@@ -2151,6 +2215,9 @@ class Supervisor:
                  what           how to name them in the refusal
         Exit:    None; raises TransitionRefused naming the unknown ids
         """
+        # PLAYERS IN THIS SCENE
+        #   unknown   the ids not in the evidence record
+
         unknown = [e for e in evidence_ids if e not in self.evidence]
         if unknown:
             raise TransitionRefused(f"unknown {what}: {unknown}")
@@ -2217,7 +2284,9 @@ class Supervisor:
                                   replace the stored ones if given; kept if
                                   left out (None)
         Exit:    None. Refused (TransitionRefused) with no rationale, for an
-                 executed decision, or for unknown evidence ids. Logs
+                 unknown or executed decision, or for unknown evidence ids,
+                 before anything changes. Otherwise records `by` among the
+                 decision's class setters and logs
                  DECISION_RECLASSIFIED. A lowering after a blocked request
                  escalates.
 
@@ -2321,7 +2390,7 @@ class Supervisor:
                  cited evidence; an unknown evidence id is refused and
                  nothing changes
 
-        Spec: Rule 4 (~lines 330-338): "Before any execution-class decision,
+        Spec: Rule 4, Decisions Have Living Ownership: "Before any execution-class decision,
         a single agent must explicitly accept authorization, risk
         acceptance, and rationale documentation as their responsibility."
         Why: "Diffused ownership is functionally equivalent to no
@@ -2376,12 +2445,15 @@ class Supervisor:
         Enter:   sig   the signal
         Exit:    True if its classification counts as stabilized
 
-        Spec: Rule 3 (~lines 316-324): "Execution cannot proceed while
-        interpretive uncertainty remains unresolved and unstabilized ...
-        Interpretive stability is achieved by naming the uncertainty, not
-        by eliminating it." The irreversible gate requires "classification
-        stabilized" (~line 992). How to measure "stabilized" is the
-        IMPLEMENTATION DECISION D8:
+        Spec: Rule 3, Interpretive Stability Precedes Execution: "Execution
+        cannot proceed while interpretive uncertainty remains unresolved and
+        unstabilized ... Interpretive stability is achieved by naming the
+        uncertainty, not by eliminating it." The irreversible gate requires
+        "classification stabilized" (Layer 4, Execution Gates), which the
+        spec's operational definitions now define as "no signal has been
+        reclassified to a different operational state since its review
+        opened. Re-confirming the same state does not destabilize it". The
+        exact measurement is the IMPLEMENTATION DECISION D8:
           - never classified -> not stable
           - classified but review never opened -> stable
           - otherwise take the last classification at or before the review
@@ -2422,9 +2494,10 @@ class Supervisor:
         Enter:   decision_id   the decision
         Exit:    (score, factors): the weighted score and each factor's
                  value, all rounded to 4 decimal places. A decision with no
-                 registered signals scores 1.0 on everything.
+                 registered signals scores 1.0 on everything. Raises
+                 TransitionRefused for an unknown decision.
 
-        Spec: Layer 4, Coherence Score (~lines 948-962): "a continuous
+        Spec: Layer 4, Coherence Score: "a continuous
         0.0-1.0 measure of decision integrity at a given decision node ...
         a running assessment of how much epistemic confidence the current
         decision state actually warrants." The five factor names and weights
@@ -2436,14 +2509,18 @@ class Supervisor:
                                     / signals. Trajectory lock counts as
                                     open: the spec calls it "a permanent
                                     marker that the loop remained open"
-                                    (~line 946).
+                                    (Layer 4, Commitment State Machine).
           classification_stability  share of signals that pass D8
-          closure_quality           evidence closures / (real closures +
-                                    reopens); 1.0 if there are neither.
-                                    Attempted closures are left out; each
-                                    reopen counts as a closure that did not
-                                    hold (spec ~line 942: reopen history
-                                    feeds the coherence score).
+          closure_quality           chain-sound evidence closures / (real
+                                    closures + reopens); 1.0 if there are
+                                    neither. An evidence closure that is not
+                                    chain-sound counts as non-evidence
+                                    (Layer 2, Closure Chain). Attempted
+                                    closures are left out; each reopen
+                                    counts as a closure that did not hold
+                                    (Layer 4, Commitment State Machine:
+                                    reopen history feeds the coherence
+                                    score).
           recurrence_pressure       1 - the largest min(1, members /
                                     threshold) over the decision's
                                     recurrence groups not yet reviewed;
@@ -2451,9 +2528,11 @@ class Supervisor:
                                     not only this decision's
           authority_compression     1 - the largest share of all real
                                     closures made by one agent's
-                                    non-evidence closures; 0 compression
-                                    unless there are at least two closures
-                                    and at least one non-evidence closure
+                                    non-evidence closures (anything but a
+                                    chain-sound evidence closure, lock-in
+                                    included); 0 compression unless there
+                                    are at least two closures and at least
+                                    one non-evidence closure
         """
         # PLAYERS IN THIS SCENE
         #   sigs                the decision's registered signals
@@ -2540,25 +2619,30 @@ class Supervisor:
         Enter:   decision_id   the decision
         Exit:    a sorted list of void descriptions, without duplicates
 
-        Spec: Layer 0, Architecture Precondition (~lines 161-268). With the
-        precondition unmet, execution gates are "Structurally void"
-        (~line 268): "When the Architecture Precondition fails, the
-        architecture itself is the open loop" (~line 272).
+        Spec: Layer 0, Architecture Precondition. With the precondition
+        unmet, execution gates are "Structurally void" (Why This Matters):
+        "When the Architecture Precondition fails, the architecture itself
+        is the open loop" (same section).
 
         Checked, per high-consequence signal of the decision (constraint
         and anomaly signals; IMPLEMENTATION DECISION D9, in types.py), for
         its failure mode (Signal.mode):
           AP-A / AP.1  no steward, in the architecture or on the signal
-                       (~lines 169-175, 247)
+                       (The Eight Sub-Conditions, AP.1 and AP.1a; The Eight
+                       Void Types, AP-A)
           AP.1b        no successor, in the architecture or on the signal,
-                       or a successor who is the steward (~line 177)
+                       or a successor who is the steward (The Eight
+                       Sub-Conditions, AP.1b)
           AP-F / AP.6  reporters are registered for the mode and every one
-                       of them is an interested party (~lines 209-215, 257)
+                       of them is an interested party (The Eight
+                       Sub-Conditions, AP.6; The Eight Void Types, AP-F)
           AP-G         the signal's registrant is under Sender Discount
-                       (~line 259)
-        And once for the whole architecture, not per decision:
+                       (The Eight Void Types, AP-G)
+        And for the whole architecture (every registered channel, whatever
+        the decision's signals are):
           AP.2         every registered channel not tested under load:
-                       "Untested channels are treated as absent" (~line 183)
+                       "Untested channels are treated as absent" (The Eight
+                       Sub-Conditions, AP.2)
         """
         # PLAYERS IN THIS SCENE
         #   voids        the void descriptions found so far
@@ -2581,7 +2665,8 @@ class Supervisor:
                 voids.append(f"AP-A stewardship void: no steward for failure mode {mode!r}")
             # --- AP.1b: is a successor registered, and someone else? -------
             # A "successor" who is the steward is still "a single point of
-            # failure" (~line 177). Found by the Alloy model
+            # failure" (AP.1b, Stewardship Succession, which since October
+            # 2026 says so explicitly). Found by the Alloy model
             # (verification/alloy, NoSinglePointOfStewardship).
             steward = arch.stewards.get(mode) or sig.steward
             successor = arch.successors.get(mode) or sig.successor
@@ -2610,12 +2695,8 @@ class Supervisor:
         return sorted(set(voids))
 
     # =======================================================================
-    # ACT VIII, SCENE 8 — THE INTERLOCK
-    # May this decision execute? Check the gates, and handle overrides.
-    # =======================================================================
-
-    # =======================================================================
     # ACT VIII, SCENE 7b — WHAT THE IRREVERSIBLE GATE ASKS OF LOOPS AND EVIDENCE
+    # Is each constraint/anomaly loop resolved, and is there an EES anywhere?
     # =======================================================================
 
     def _gate_resolved(self, sig: Signal) -> bool:
@@ -2673,6 +2754,11 @@ class Supervisor:
         return any(ev.kind in EES_ELIGIBLE_KINDS and ev.produced_by not in excluded
                    for ev in support)
 
+    # =======================================================================
+    # ACT VIII, SCENE 8 — THE INTERLOCK
+    # May this decision execute? Check the gates, and handle overrides.
+    # =======================================================================
+
     def request_execution(self, decision_id: str, by: str,
                           override_rationale: Optional[str] = None) -> GateResult:
         """
@@ -2683,73 +2769,98 @@ class Supervisor:
                         link, chain-sound); minimum evidence closure ratio for
                         the other loop types; at least one External Evidence
                         Source; classification stabilized; recurrence groups
-                        reviewed; coherence at or above threshold
+                        reviewed; coherence at or above threshold; plus the
+                        implementation checks listed below (no unresolved
+                        structural reviews, no open off-envelope/containment
+                        signals)
           elevated      classification acknowledged; open loops documented
           routine       signal registration complete
-        Rule 4 acceptance is required for every class and cannot be
-        overridden. A Layer 0 void makes the gate structurally void.
-        Other failures may be overridden: the override is permanently logged
-        with identity, rationale and time; for irreversible execution,
-        constraint and anomaly loops under review are latched into
-        trajectory_lock with a lock-in closure record ("open-loop
-        irreversible execution").
+        Order of checks: an already-executed decision is refused; then a
+        missing Rule 4 acceptance returns at once (EXECUTION_REFUSED); then
+        an unresolved EXECUTION_CLASS_DOWNGRADE_AFTER_BLOCK review on the
+        decision returns at once (EXECUTION_BLOCKED). Neither of those two
+        can be overridden, and each marks the decision `ever_blocked`. Only
+        then are the gates above evaluated. A Layer 0 void makes the gate
+        structurally void. Other failures may be overridden: the override
+        is permanently logged with identity, rationale and time; for
+        irreversible execution, constraint and anomaly loops under review
+        are latched into trajectory_lock with a lock-in closure record
+        ("open-loop irreversible execution"). Failures with no override
+        mark the decision `ever_blocked`, so a later lowering of its class
+        escalates (reclassify_decision, ACT VIII, Scene 1b).
 
         Enter:   decision_id          the decision asking to execute
                  by                   the requesting agent
                  override_rationale   if given, overrides any gate failure
-                                      except Rule 4
+                                      except Rule 4 and an unresolved
+                                      downgrade-after-block review
         Exit:    a GateResult. On permission (clean or overridden) the
-                 decision is marked executed. Raises TransitionRefused if it
-                 has already executed.
+                 decision is marked executed. Raises TransitionRefused if the
+                 decision is unknown or has already executed (the latter
+                 after the clock has ticked).
 
         Spec sources:
-          Execution Gates table (~lines 988-994), quoted above.
-          Overrides (~line 996): "Gates can be overridden. Every override is
-            permanently logged with the agent's identity, rationale, and
+          Execution Gates table (Layer 4, Execution Gates), summarized
+            above. Its "Operational definitions" (October 2026) give the
+            meanings used here: "Classification acknowledged" = every
+            signal carries an operational state; "Open loops documented" =
+            no signal remains merely `registered`; "Recurrence groups
+            reviewed" = no recurrence group among the decision's signals
+            has a structural review still awaiting its Rule 8 model update
+            ("A group that never crossed its threshold has nothing to
+            review"); the ratio applies to "uncertainty, dissent,
+            classification, and framing signals", and "With no such
+            closures, there is nothing to measure and the requirement is
+            met." The spec also says "Lock-in closures from earlier
+            overrides count among the closures"; the code would count them,
+            but it only ever creates lock-in closures on constraint and
+            anomaly signals (see the override below), so none reach the
+            ratio in practice.
+          Overrides (same section): "Gates can be overridden. Every override
+            is permanently logged with the agent's identity, rationale, and
             timestamp. The system does not prevent decisions. It makes the
             epistemic quality of decisions visible, auditable, and
             permanent."
-          Coherence (~line 960): "A score below the domain-configured
-            threshold blocks irreversible execution pending
-            acknowledgment." Here the acknowledgment is an override.
+          Execution Class Assignment (same section): "Until that review is
+            resolved, the decision cannot execute at any class, and this
+            cannot be overridden".
+          Coherence (Layer 4, Coherence Score): "A score below the
+            domain-configured threshold blocks irreversible execution
+            pending acknowledgment." Here the acknowledgment is an override.
           Reversibility Logic: "Irreversible decisions require
             evidence-based closure for all constraint and anomaly loops, or
             an explicit open-loop authorization with permanent audit
             logging." Closure Chain: a closure that is not chain-sound
             "counts as a non-evidence closure ... at the execution gates, in
             the evidence closure ratio, and in the coherence score."
-          Open-Loop Irreversible Execution (Key Definitions, ~line 1236):
+          Open-Loop Irreversible Execution (Key Definitions):
             "Permitted with explicit authorization — permanently logged."
-          Lock-in closure (~lines 946, 1216): recorded as under_review ->
+          Lock-in closure (Layer 4, Commitment State Machine; Key
+            Definitions, Lock-in Closure): recorded as under_review ->
             trajectory_lock; "a trajectory lock indicator when it occurs in
             the presence of open constraint loops".
-          Escalation conditions (~lines 516-517): lock-in closure with open
-            constraint loops; suppressed signal before irreversible
-            execution.
+          Escalation conditions (Layer 2, Escalation Conditions): lock-in
+            closure with open constraint loops; suppressed signal before
+            irreversible execution.
 
         IMPLEMENTATION DECISIONS made here (not in the spec):
           - The class requirements are cumulative: routine's check applies to
             every class, elevated's checks also apply to irreversible.
-          - "Classification acknowledged" = every signal has an operational
-            state. "Open loops documented" = no signal is still merely
-            `registered` (each has at least been classified).
-          - "Recurrence groups reviewed" fails only for a group with an
-            unresolved Rule 7 review; a group that never reached the
-            threshold has no review and passes.
-          - The evidence closure ratio (D4) counts the real closures of the
-            decision's non-constraint, non-anomaly signals, including
-            lock-in closures from earlier overrides; it is skipped when
-            there are none ("there is nothing to measure").
+          - The evidence closure ratio (D4) treats "the other loops" as the
+            decision's non-constraint, non-anomaly signals (D9's
+            high-consequence test), and its default minimum is 0.5.
           - Unresolved structural reviews on the decision's signals, or on
             the decision itself, block irreversible execution.
           - Open off-envelope or containment signals block irreversible
-            execution. This reads Key Definitions (~lines 1190, 1192):
-            off-envelope needs "Evidence-based classification ... before
-            irreversible execution"; containment needs "extraordinary
-            justification and independent steward review".
-          - Overrides are allowed for every gate failure except Rule 4,
-            including Layer 0 voids (the result still reports
-            architecture_void=True and the override log records it).
+            execution. This reads Key Definitions (Operational State:
+            Off-Envelope and Containment): off-envelope needs
+            "Evidence-based classification ... before irreversible
+            execution"; containment needs "extraordinary justification and
+            independent steward review".
+          - Overrides are allowed for every gate failure except the two
+            never-overridable ones above, including Layer 0 voids (the
+            result still reports architecture_void=True and the override
+            log records it).
           - Lock-in latching applies only to constraint and anomaly signals
             that are under_review: that is the only state the state machine
             lets move to trajectory_lock. Constraint and anomaly loops that
@@ -2817,7 +2928,8 @@ class Supervisor:
                               declared_class=d.execution_class)
         # --- Relabeled after a refusal: blocked at every class -------------
         # Never overridable: "Until that review is resolved, the decision
-        # cannot execute at any class, and this cannot be overridden."
+        # cannot execute at any class, and this cannot be overridden" (Layer
+        # 4, Execution Class Assignment).
         relabel = sorted(r.review_id for r in self.reviews if not r.resolved
                          and r.condition == E.EXECUTION_CLASS_DOWNGRADE_AFTER_BLOCK
                          and r.scope == f"decision:{decision_id}")
@@ -2939,9 +3051,9 @@ class Supervisor:
         # --- Irreversible override: open-loop irreversible execution -------
         if applied == ExecutionClass.IRREVERSIBLE:
             # Latch each constraint/anomaly signal under review into
-            # trajectory_lock,
-            # with a lock-in closure record (the spec's fourth closure type,
-            # which has no closed state of its own, ~line 946).
+            # trajectory_lock, with a lock-in closure record (the spec's
+            # fourth closure type, which has no closed state of its own;
+            # Layer 4, Commitment State Machine).
             for s in sigs:
                 if s.high_consequence and s.state == S.UNDER_REVIEW:
                     self._closure_seq += 1

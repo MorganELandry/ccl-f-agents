@@ -6,21 +6,24 @@ A Play in Nine Scenes
 PROLOGUE
 --------
 Tests for Supervisor.classify(), which implements CCL-F v0.2 Rule 2,
-"Classification Precedes Action" (spec lines 302-312), together with the
-five operational states of Key Definitions (lines 1186-1194).
+"Classification Precedes Action" (Layer 1, Rule 2), together with the
+five operational states of Key Definitions (Operational State).
 
 What the spec requires, and what each scene checks:
 
-  "Unvalidated conditions cannot be classified as nominal" (lines 304, 310).
-  "Classification must be supported by evidence, not assumed" (line 310).
+  "Unvalidated conditions cannot be classified as nominal" (Rule 2, What it
+    requires and What to do).
+  "Classification must be supported by evidence, not assumed" (Rule 2,
+    What to do).
     The runtime reads "validated" through the EES test: nominal needs at
     least one cited item of External Evidence Source evidence. Anything
     less is recorded as elevated uncertainty, and the refusal is audited.
   "Classification into any state other than nominal does not block
     execution — it determines what coordination requirements apply"
-    (line 1194): non-nominal classifications are accepted as given.
-  registered -> classified is "required before review opens" (line 876).
-  The Therac-25 pattern (Rule 3 cases, line 326): an assertion that no
+    (Key Definitions, Operational State): non-nominal classifications are accepted as given.
+  registered -> classified is "required before review opens" (Layer 4,
+    Commitment State Machine).
+  The Therac-25 pattern (Rule 3, Cases): an assertion that no
     malfunction occurred is not validating evidence.
 
 THE PLAYBILL
@@ -93,7 +96,7 @@ def sv():
 # ===========================================================================
 # SCENE 1 — "IT'S FINE" IS NOT A CLASSIFICATION
 # Proves: nominal with no evidence becomes elevated uncertainty, and the
-# refusal is logged (lines 304, 310).
+# refusal is logged (Rule 2: Classification Precedes Action).
 # ===========================================================================
 
 def test_nominal_without_evidence_is_refused(sv):
@@ -143,7 +146,7 @@ def test_nominal_with_non_ees_evidence_is_refused(sv, kind):
 # ===========================================================================
 # SCENE 3 — MARKING ONE'S OWN HOMEWORK
 # Proves: evidence produced by the signal's registrant does not validate a
-# nominal classification (EES, line 490).
+# nominal classification (Layer 2, External Evidence Source (EES)).
 # ===========================================================================
 
 def test_nominal_with_registrant_evidence_is_refused(sv):
@@ -177,7 +180,7 @@ def test_nominal_with_ees_evidence_is_accepted(sv):
 
 # ===========================================================================
 # SCENE 5 — THE OTHER FOUR STATES NEED NO PERMISSION
-# Proves: line 1194, non-nominal classification is applied as given; it
+# Proves: Key Definitions, Operational State: non-nominal classification is applied as given; it
 # changes requirements rather than being refused. (Parametrized.)
 # ===========================================================================
 
@@ -196,7 +199,7 @@ def test_non_nominal_states_are_applied_as_given(sv, state):
 
 # ===========================================================================
 # SCENE 6 — CLASSIFIED BEFORE REVIEWED
-# Proves: line 876, classification moves registered -> classified, and is
+# Proves: Layer 4, Commitment State Machine: classification moves registered -> classified, and is
 # what lets review open.
 # ===========================================================================
 
@@ -236,7 +239,7 @@ def test_reclassification_is_recorded_in_history(sv):
 # SCENE 8 — WHO PROPOSED IT?
 # Proves: a model's proposal is marked as such in the audit, so the record
 # shows when probabilistic automation tried to call something nominal
-# (AI Applications, line 1310).
+# (AI Applications, Three Applications).
 # ===========================================================================
 
 def test_model_proposals_are_marked_in_the_audit(sv):
@@ -254,9 +257,9 @@ def test_model_proposals_are_marked_in_the_audit(sv):
 
 # ===========================================================================
 # SCENE 9 — NO DECISION WITHOUT A CLASSIFICATION
-# Proves: line 304, "Every execution-class decision requires explicit
+# Proves: Rule 2, "Every execution-class decision requires explicit
 # operational state classification"; the elevated and irreversible gates
-# both name the unclassified signal.
+# both refuse, with a "classification not acknowledged" failure.
 # ===========================================================================
 
 @pytest.mark.parametrize("cls", [ExecutionClass.ELEVATED, ExecutionClass.IRREVERSIBLE],
@@ -267,7 +270,8 @@ def test_unclassified_signal_fails_elevated_and_irreversible_gates(sv, cls):
 
     Enter:   sv    fixture (signal "s" registered, unclassified)
              cls   ELEVATED or IRREVERSIBLE
-    Exit:    passes if the gate refuses and a failure names classification
+    Exit:    passes if the gate refuses and a failure reads "classification
+             not acknowledged"
     """
     # PLAYERS IN THIS SCENE
     #   result   the GateResult

@@ -65,9 +65,11 @@ def get_llm():
              "gpt-4o-mini"), temperature 0.1 and OPENAI_API_KEY
              raises ImportError if langchain-openai is not installed
 
-    A missing API key is only logged as a warning here, not raised. The
-    model object is still built; the failure then shows up when it is first
-    used, where Advisor.propose() falls back to its conservative proposal.
+    A missing API key is only logged as a warning by this code, not raised.
+    The ChatOpenAI constructor itself then refuses to build without a key
+    (the openai library raises OpenAIError, "Missing credentials"), so the
+    error comes out of this function; Advisor._model() catches it and
+    Advisor.propose() falls back to its conservative proposal.
     """
     # PLAYERS IN THIS SCENE
     #   ChatOpenAI   LangChain's OpenAI chat-model class (lazily imported)
@@ -88,7 +90,8 @@ def get_llm():
     model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     api_key = os.environ.get("OPENAI_API_KEY", "")
 
-    # --- Warn, but do not stop, if the key is missing ------------------------
+    # --- Warn, but do not stop here, if the key is missing ------------------
+    # (ChatOpenAI below raises on its own when given no key.)
     if not api_key:
         logger.warning("[cclf-backend/openai] OPENAI_API_KEY not set.")
 

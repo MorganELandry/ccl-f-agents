@@ -131,8 +131,10 @@ def get_llm(backend: str | None = None):
                        None to use _DEFAULT_BACKEND
     Exit:    a LangChain chat model built by that backend module's get_llm()
              raises ValueError for an unknown backend name; the backend
-             module may raise ImportError (package missing) or, for azure,
-             EnvironmentError (settings missing)
+             module may raise ImportError (package missing), for azure
+             EnvironmentError (settings missing), and the provider's own
+             library may raise while building the model (for openai, an
+             OpenAIError when no API key is set)
 
     A new model object is built on every call; nothing is cached here.
     """

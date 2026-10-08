@@ -6,15 +6,16 @@ A Play in Nine Scenes
 PROLOGUE
 --------
 Tests for cclf/statemachine.py, the commitment state machine of CCL-F v0.2
-Layer 4 (spec lines ~870-946). Every expected value below is read off the
+Layer 4 (Commitment State Machine). Every expected value below is read off the
 spec's transition listing, not off the code. The code's table is checked
 against a copy of the spec listing typed out by hand in this file.
 
 The spec says the machine's "blocked transitions are the supervisor's
 forbidden-event set, enforced structurally rather than by convention"
-(line 868). So these tests ask two kinds of question: is every listed
-transition allowed, and is everything else (in particular the four
-transitions the spec singles out, lines 935-940) refused?
+(Layer 4 — Runtime Realization, introduction). So these tests ask two kinds
+of question: is every listed transition allowed, and is everything else (in
+particular the four transitions the spec singles out as structurally
+blocked) refused?
 
 THE PLAYBILL
     Scene 1   test_table_matches_spec_listing_exactly
@@ -62,10 +63,10 @@ from cclf.types import CLOSED_STATES, CommitmentState as S
 # DRAMATIS PERSONAE (every module-level variable, declared here at the top)
 # ===========================================================================
 
-# SPEC_LISTING — the transition listing of spec lines 875-892, typed out by
-#   hand: the nine forward transitions, two recovery transitions and three
-#   reopen transitions. Exits are listed separately in the spec (line 895)
-#   and are tested in test_exits.py.
+# SPEC_LISTING — the transition listing of the Commitment State Machine,
+#   typed out by hand: the nine forward transitions, two recovery transitions
+#   and three reopen transitions. Exits are listed separately in the spec
+#   (EXIT TRANSITIONS) and are tested in test_exits.py.
 SPEC_LISTING = {
     (S.UNREGISTERED, S.REGISTERED),
     (S.REGISTERED, S.CLASSIFIED),
@@ -88,7 +89,8 @@ SPEC_LISTING = {
 CLOSED = sorted(CLOSED_STATES, key=lambda s: s.value)
 
 # OPEN_STATES_PER_SPEC — states a signal is "open" in for exit purposes
-#   (line 895 "any open state"): entered the system, not closed, not latched.
+#   (Commitment State Machine, "any open state"): entered the system, not
+#   closed, not latched, not already exited.
 OPEN_STATES_PER_SPEC = [S.REGISTERED, S.CLASSIFIED, S.UNDER_REVIEW, S.SUPPRESSED,
                         S.ESCALATED]
 
@@ -145,7 +147,7 @@ def test_every_listed_transition_is_allowed():
 
 # ===========================================================================
 # SCENE 3 — BLOCKED: CLOSED BEFORE CLASSIFIED
-# Proves: spec line 937, "A signal cannot be closed before it is classified".
+# Proves: Commitment State Machine, "A signal cannot be closed before it is classified".
 # ===========================================================================
 
 @pytest.mark.parametrize("before", [S.UNREGISTERED, S.REGISTERED])
@@ -167,8 +169,8 @@ def test_cannot_close_before_classified(before):
 
 # ===========================================================================
 # SCENE 4 — BLOCKED: CLOSED BEFORE REVIEW
-# Proves: spec line 938, "A classified signal cannot be closed before review
-# opens".
+# Proves: Commitment State Machine, "A classified signal cannot be closed
+# before review opens".
 # ===========================================================================
 
 @pytest.mark.parametrize("closed", CLOSED)
@@ -185,8 +187,9 @@ def test_classified_cannot_close_before_review(closed):
 
 # ===========================================================================
 # SCENE 5 — BLOCKED: THE SILENT CLOSE OF A SUPPRESSED SIGNAL
-# Proves: spec line 939, "A suppressed signal cannot be silently closed";
-# the only way on is the recovery transition back into review (line 887).
+# Proves: Commitment State Machine, "A suppressed signal cannot be silently
+# closed"; the recovery transition back into review (suppressed ->
+# under_review) is allowed.
 # ===========================================================================
 
 @pytest.mark.parametrize("closed", CLOSED)
@@ -203,7 +206,8 @@ def test_suppressed_cannot_be_silently_closed(closed):
 
 # ===========================================================================
 # SCENE 6 — A CLOSED LOOP HAS ONE DOOR
-# Proves: lines 889-892 and 942: closed states are stable but not terminal;
+# Proves: Commitment State Machine, REOPEN TRANSITIONS and "Closed states
+# are stable but not terminal":
 # the only way out of any closed state is back into under_review.
 # ===========================================================================
 
@@ -226,7 +230,7 @@ def test_closed_loop_reopens_only_into_review():
 
 # ===========================================================================
 # SCENE 7 — RULE 2 GUARDS THE REVIEW-ROOM DOOR
-# Proves: line 876, "registered -> classified (Rule 2: required before
+# Proves: Commitment State Machine, "registered -> classified (Rule 2: required before
 # review opens)": review cannot open straight from registered.
 # ===========================================================================
 
@@ -242,8 +246,9 @@ def test_review_cannot_open_before_classification():
 
 # ===========================================================================
 # SCENE 8 — TRAJECTORY LOCK IS THE LAST STOP
-# Proves: line 946, "The trajectory_lock state is terminal and distinct from
-# closure": no transition leaves it and it is not a closed state.
+# Proves: Commitment State Machine, "The trajectory_lock state is terminal
+# and distinct from closure": no transition leaves it, it is not a closed
+# state, and it cannot exit.
 # ===========================================================================
 
 def test_trajectory_lock_is_terminal():
@@ -251,7 +256,8 @@ def test_trajectory_lock_is_terminal():
     Nothing leaves trajectory_lock, and it is not one of the closed states.
 
     Enter:   (nothing)
-    Exit:    passes if every target is refused and the lock is not closed
+    Exit:    passes if every target is refused, the lock is not closed, and
+             exit_allowed refuses an exit from it
     """
     assert not any(check_transition(S.TRAJECTORY_LOCK, t)[0] for t in S)
     assert S.TRAJECTORY_LOCK not in CLOSED_STATES
@@ -260,8 +266,8 @@ def test_trajectory_lock_is_terminal():
 
 # ===========================================================================
 # SCENE 9 — WHO MAY LEAVE BY THE SIDE DOOR
-# Proves: line 895, "any open state -> exited(type)"; closed, locked and
-# already-exited signals cannot exit.
+# Proves: Commitment State Machine, "any open state -> exited(type)";
+# unregistered, closed, locked and already-exited signals cannot exit.
 # ===========================================================================
 
 def test_exit_allowed_only_from_open_states():

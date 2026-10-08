@@ -23,7 +23,7 @@ events (plain dicts) ──► graph.py (LangGraph)  interpret ─► apply ─�
 
 | Module | Role |
 |---|---|
-| `cclf/types.py` | The vocabulary: six signal types, five operational states, the commitment states, 14 exit types, four closure types, evidence kinds, referents, execution classes, nine escalation conditions. Records: `Signal`, `Evidence`, `ClosureRecord`, `ExitRecord`, `Decision`, `Architecture`. |
+| `cclf/types.py` | The vocabulary: six signal types, five operational states, the commitment states, 14 exit types, four closure types, evidence kinds, referents, execution classes, ten escalation conditions. Records: `Signal`, `Evidence`, `ClosureRecord`, `ExitRecord`, `Decision`, `Architecture`. |
 | `cclf/statemachine.py` | The Layer 4 transition table, transcribed row by row, plus named reasons for blocked transitions, `exit_allowed()` and `reentry_allowed()`. |
 | `cclf/audit.py` | Append-only audit trail. Each entry holds the SHA-256 of the previous one, so editing, deleting or reordering an entry breaks `AuditTrail.verify()`. Entries cut off the end are caught only against a `head()` hash kept elsewhere. |
 | `cclf/supervisor.py` | The rule engine. Every state change goes through it, and every rule it enforces is labelled with the draft section it comes from. |
@@ -83,7 +83,7 @@ The ten escalation conditions each open a `StructuralReview`. Reviews are dedupl
 | `off_envelope_or_containment` | A signal is classified off-envelope or containment |
 | `authority_closure_count` | An irreversible decision's signals have more authority closures than the threshold (D5, default 1) |
 | `role_switch_on_constraint` | A constraint signal is closed by role switch |
-| `lock_in_with_open_constraints` | An irreversible gate is overridden with constraint loops open |
+| `lock_in_with_open_constraints` | An irreversible gate is overridden while constraint or anomaly loops are open (latched into `trajectory_lock` or still failing the gate) |
 | `suppressed_before_execution` | An irreversible request is made over a suppressed signal; the review blocks that same request |
 | `framing_adopted_over_open_constraints` | A frame is adopted while it displaces open constraint signals |
 | `credibility_discounting` | A credibility discount is not supported by the target's track record (D7) |
@@ -100,7 +100,7 @@ All 14 exit types are supported. Their obligations are enforced:
 - a legal exit gives one of four sub-types;
 - a containment, deferred or ambiguity exit can register a resolution condition: what the loop is waiting for.
 
-Nine exit types leave the loop open (`EXIT_LEAVES_LOOP_OPEN`). An exited constraint of those types still blocks an irreversible gate. Re-entry follows the taxonomy:
+Nine exit types leave the loop open (`EXIT_LEAVES_LOOP_OPEN`). At the irreversible gate, an exited constraint or anomaly loop counts as resolved only after a terminal or superseded exit (`RESOLVING_EXITS`); any other exit, including timeout, whistleblower and legal, still blocks it. Re-entry follows the taxonomy:
 
 - stated for recoverable and delegated exits;
 - a successor is needed for forced and key-person exits;
@@ -109,7 +109,7 @@ Nine exit types leave the loop open (`EXIT_LEAVES_LOOP_OPEN`). An exited constra
 - for legal exits, only a regulatory intervention or investigative hold, once lifted;
 - refused here for whistleblower, which continues in an external process;
 - none for terminal, superseded and timeout, which have no transition in the draft;
-- for containment, deferred and ambiguity, only when the resolution condition registered at exit is met (D2); with none registered, never, and the concern is re-registered as a new linked signal.
+- for containment, deferred and ambiguity, only when the resolution condition registered at exit is met (D2); with none registered, never; the refusal says to re-register the concern as a new signal linked to the exited one.
 
 ## Coherence score (Layer 4)
 
@@ -137,7 +137,7 @@ Requirements are cumulative across the three execution classes.
 
 **Rule 4 acceptance** is required for every class and cannot be overridden: an agent must explicitly accept authorization, risk and rationale.
 
-Other gate failures can be overridden. An override:
+Other gate failures, apart from that relabeling block, can be overridden. An override:
 
 - is logged with identity, rationale and time (`GATE_OVERRIDE`);
 - reports any architecture void;
@@ -153,6 +153,7 @@ An executed irreversible decision cannot be executed again.
 - **AP.1b:** no successor, or a successor who is the steward (still a single point of failure).
 - **AP-F / AP.6:** every registered reporter is an interested party (a captured channel).
 - **AP-G:** the registrant is under sender discount.
+
 Across the whole architecture, it also checks:
 
 - **AP.2:** a registered channel has not been tested under load, so it is treated as absent.

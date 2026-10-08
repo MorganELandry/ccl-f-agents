@@ -9,7 +9,8 @@ Tests for cclf/observability.py, the optional OpenTelemetry tracing and
 metrics around the event pipeline.
 
 The spec asks that the runtime make "the epistemic quality of decisions
-visible, auditable, and permanent" (line 996); the audit trail does that.
+visible, auditable, and permanent" (Layer 4, Execution Gates); the audit
+trail does that.
 Telemetry is an extra window onto it, so its one hard requirement here is
 that it never changes or breaks a run: everything must be a no-op when
 observability is disabled, when the OpenTelemetry packages are missing, or
@@ -92,6 +93,9 @@ def test_missing_otel_is_noop(monkeypatch):
     Enter:   monkeypatch   enables observability and marks OTel missing
     Exit:    passes if setup() is False and active is False
     """
+    # PLAYERS IN THIS SCENE
+    #   inst   a fresh Instrumentor
+
     monkeypatch.setenv("CCLF_OBSERVABILITY_ENABLED", "true")
     monkeypatch.setattr(obs, "OTEL_AVAILABLE", False)
     inst = Instrumentor()
@@ -113,9 +117,10 @@ def test_inactive_methods_do_nothing():
              for closure, escalation and gate events
     """
     # PLAYERS IN THIS SCENE
-    #   inst    a fresh, never-set-up Instrumentor
-    #   s       what span() yields
-    #   event   each event name tried
+    #   inst      a fresh, never-set-up Instrumentor
+    #   s         what span() yields
+    #   event     each event name tried
+    #   payload   the payload passed with it
 
     inst = Instrumentor()
     with inst.span("anything", key="value") as s:
@@ -145,6 +150,7 @@ def test_wrap_preserves_results_and_name():
     #   result    the dict the node returns
     #   node      a fake pipeline node
     #   wrapped   node wrapped by an inactive Instrumentor
+    #   state     the state passed to the wrapped node
 
     seen, result = [], {"outcome": "ok"}
 
@@ -171,7 +177,8 @@ def test_wrapped_graph_gives_same_outcome_as_unwrapped():
     The Therac-25 replay produces identical audit events either way.
 
     Enter:   (nothing)
-    Exit:    passes if both runs have the same event list and both chains verify
+    Exit:    passes if both runs have the same event list and the traced
+             run's chain verifies
     """
     # PLAYERS IN THIS SCENE
     #   plain, traced   supervisors from the two replays

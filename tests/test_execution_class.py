@@ -31,15 +31,18 @@ That makes the applied class visible in the verdict, not only in
 effective_class().
 
 THE PLAYBILL
-    Scenes 1-5    helpers: failures_with(), authority_world(), sound_world(),
-                  reversal_evidence(), register()
+    Scenes 1-5    helpers: failures_with(), as_value(), decision_reviews()
+                  (Scene 1); authority_world(), sound_world(),
+                  reversal_evidence(), register() (Scenes 2-5)
     Scenes 6-10   irreversible by default; the record shows both classes
     Scenes 11-12  a tested reversal path lets the declared class apply
     Scenes 13-22  what does NOT count as a tested reversal path
     Scenes 23-24  no exemption for constraint or anomaly loops
     Scenes 25-32  reclassification: rationale, logging, raising, lowering
-    Scenes 33-38  lowering after a blocked request escalates
+    Scenes 33-38  lowering after a blocked request escalates (Scene 33 also
+                  holds the helper blocked_then_lowered())
     Scene 39      Rule 4 acceptance still required; unknown evidence ids
+                  (two tests)
 
 READER'S NOTE — pytest.mark.parametrize
     `@pytest.mark.parametrize("name", [a, b, c])` runs the same test once
@@ -124,7 +127,9 @@ RULE4_MSG = "Rule 4"
 # DOWNGRADE_VALUE — the plain value of the new escalation condition.
 DOWNGRADE_VALUE = "execution_class_downgrade_after_block"
 
-# RECLASS_KEYS — payload keys of the DECISION_RECLASSIFIED audit event.
+# RECLASS_KEYS — payload keys every DECISION_RECLASSIFIED audit entry must
+#   carry (the runtime also logs "applied_from" and "applied_to"; Scene 27
+#   checks only that these six are present).
 RECLASS_KEYS = {"decision", "from", "to", "rationale", "reversal_path", "evidence"}
 
 # REGISTRAR — the agent who registers decisions in these scenes.
@@ -274,6 +279,9 @@ def register(sv, declared, path=None, evidence=(), accept=True, decision_id="d1"
              decision_id   the decision's ID (default "d1")
     Exit:    the Decision object
     """
+    # PLAYERS IN THIS SCENE
+    #   d   the new Decision (returned)
+
     d = sv.register_decision(decision_id, f"decision {decision_id}", declared, ["c1"],
                              REGISTRAR, reversal_path=path,
                              reversal_evidence_ids=list(evidence))
@@ -1080,7 +1088,10 @@ def test_unresolved_downgrade_review_blocks_execution_at_any_class():
     The action: request at ROUTINE; then raise back to IRREVERSIBLE (its
     loop and EES requirements are met in sound_world) and request again.
     The verdict: both blocked by the review, and at IRREVERSIBLE by nothing
-    else among the loop/EES requirements.
+    else among the loop/EES requirements. Note that the runtime checks an
+    unresolved downgrade review before every gate except Rule 4 and returns
+    at once, so the missing loop/EES failures show that early return as
+    much as they show sound_world meeting those requirements.
     """
     # PLAYERS IN THIS SCENE
     #   sv        the Supervisor

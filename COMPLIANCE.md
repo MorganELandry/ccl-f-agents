@@ -52,7 +52,7 @@ Report text sent to the advisor leaves the host.
 ### 2. Free text in the audit trail (high)
 45 CFR § 164.312(b) audit controls and § 164.312(a) access controls.
 
-The audit trail stores signal and decision descriptions, rationales and evidence sources verbatim. Evidence content is held in memory but not logged. `run_demo.py` always writes the trail to a local JSON file with no access control. The hash chain detects tampering but provides neither confidentiality nor access logging.
+The audit trail stores signal descriptions, reversal paths, rationales, credibility characterizations, Rule 8 model updates and evidence sources verbatim. Decision descriptions and evidence content are held in memory but not logged. `run_demo.py` always writes the trail to a local JSON file with no access control. The hash chain detects tampering but provides neither confidentiality nor access logging.
 
 **Remediation:** write the trail to an access-controlled, access-logged store covered by a BAA; restrict writes to the runtime and reads to authorized reviewers.
 
@@ -64,7 +64,7 @@ Spans carry only the scenario name and the event's `op`. Metrics carry closure t
 ### 4. PHI in free-text fields (architectural)
 45 CFR § 164.502(b), minimum necessary.
 
-`Signal.description`, `Evidence.content`, decision descriptions and every rationale are free text.
+`Signal.description`, `Evidence.content`, decision descriptions, reversal paths and every rationale are free text.
 
 **Options:**
 - De-identify text (for example with Microsoft Presidio) before it becomes an event.

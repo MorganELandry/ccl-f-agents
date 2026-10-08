@@ -6,7 +6,7 @@ A Play in Ten Scenes
 PROLOGUE
 --------
 Tests for Supervisor.coherence(), the coherence score of CCL-F v0.2 Layer 4
-(spec lines 948-962; Key Definitions line 1232).
+(Layer 4, Coherence Score; Key Definitions, Coherence Score).
 
 What the spec fixes:
   - a continuous score between 0.0 and 1.0 for one decision node;
@@ -16,7 +16,7 @@ What the spec fixes:
   - the closure-quality history of a loop "(including how many times it
     has been reopened, and from which closure types) is itself a
     coordination signal feeding recurrence tracking and the coherence
-    score" (line 942).
+    score" (Layer 4, Commitment State Machine).
 
 What the spec leaves open: how each factor is computed. The code's
 formulas (implementation decision D3) give each factor a value in [0, 1],
@@ -26,6 +26,7 @@ lower factor), not exact numbers, except where a number is the obvious
 reading of the factor's name.
 
 THE PLAYBILL
+    Prelude   sv (fixture), factors() and evidence_close() (helpers)
     Scene 1   test_weights_match_spec_and_sum_to_one
     Scene 2   test_score_is_the_weighted_sum_of_factors_in_range
     Scene 3   test_healthy_decision_scores_one
@@ -63,7 +64,8 @@ from stagehands import CUST, PROCESS, TECH, add_ees, decision, to_review
 # DRAMATIS PERSONAE (every module-level variable, declared here at the top)
 # ===========================================================================
 
-# SPEC_WEIGHTS — the weight table of spec lines 952-958, typed out by hand.
+# SPEC_WEIGHTS — the spec's weight table (Layer 4, Coherence Score), typed
+#   out by hand.
 SPEC_WEIGHTS = {
     "open_loops": 0.30,
     "classification_stability": 0.25,
@@ -134,7 +136,7 @@ def test_weights_match_spec_and_sum_to_one():
 # ===========================================================================
 # SCENE 2 — ONE NUMBER FROM FIVE
 # Proves: the score is the weighted sum of the five reported factors, and
-# score and factors all lie in [0, 1] (line 950).
+# score and factors all lie in [0, 1] (Layer 4, Coherence Score).
 # ===========================================================================
 
 def test_score_is_the_weighted_sum_of_factors_in_range(sv):
@@ -171,9 +173,9 @@ def test_healthy_decision_scores_one(sv):
     Enter:   sv   fixture
     Exit:    passes if the score and every factor are 1.0
 
-    One signal, not two: the code's authority-compression factor counts
-    evidence closures too, so two closures by two different closers already
-    score compression 0.5 (see Scene 8 and the report's note on D3).
+    One signal is enough. Authority compression counts only non-evidence
+    closures (see Scene 8), so a node made only of chain-sound evidence
+    closures scores 1.0 on that factor however many closers it has.
     """
     to_review(sv, "a", signal_type=U)
     evidence_close(sv, "a")
@@ -184,7 +186,8 @@ def test_healthy_decision_scores_one(sv):
 # ===========================================================================
 # SCENE 4 — OPEN LOOPS
 # Proves: more open loops, lower factor; a trajectory-locked loop still
-# counts as open ("the loop remained open", line 946).
+# counts as open ("the loop remained open", Layer 4, Commitment State
+# Machine).
 # ===========================================================================
 
 def test_open_loops_factor(sv):
@@ -214,7 +217,8 @@ def test_open_loops_factor(sv):
 def test_classification_stability_factor(sv):
     """
     Implementation-decision test (D3/D8: share of signals not reclassified
-    since review opened). Reclassifying one of two signals halves it.
+    to a different state since review opened). Reclassifying one of two
+    signals halves it.
 
     Enter:   sv   fixture
     Exit:    passes if the factor goes from 1.0 to 0.5
@@ -235,8 +239,9 @@ def test_classification_stability_factor(sv):
 
 def test_closure_quality_factor(sv):
     """
-    Implementation-decision test (D3: share of closures that are evidence
-    closures). One evidence and one authority closure gives 0.5.
+    Implementation-decision test (D3: chain-sound evidence closures divided
+    by real closures plus reopens). One evidence and one authority closure,
+    with no reopens, gives 0.5.
 
     Enter:   sv   fixture
     Exit:    passes if the factor is 0.5
@@ -266,6 +271,7 @@ def test_recurrence_pressure_factor(sv):
     """
     # PLAYERS IN THIS SCENE
     #   seen   factor values after each new member
+    #   n      each member number 1-3 of recurrence group "g"
 
     seen = []
     decision(sv, "d", [], accept=False)
@@ -280,18 +286,23 @@ def test_recurrence_pressure_factor(sv):
 
 # ===========================================================================
 # SCENE 8 — AUTHORITY COMPRESSION
-# Proves: closures concentrated in one agent's hands lower the factor.
+# Proves: non-evidence closures concentrated in one agent's hands lower the
+# factor.
 # ===========================================================================
 
 def test_authority_compression_factor(sv):
     """
-    Implementation-decision test (D3: 1 - the largest single closer's share
-    of closures, once there are at least two). Two closures by two agents
-    gives 0.5; by one agent gives 0.0.
+    Implementation-decision test (D3: 1 - the largest share of all real
+    closures made by one agent's non-evidence closures, once there are at
+    least two closures and at least one is non-evidence). Two authority
+    closures by two agents gives 0.5; by one agent gives 0.0.
 
     Enter:   sv   fixture
     Exit:    passes if the spread node scores 0.5 and the concentrated one 0.0
     """
+    # PLAYERS IN THIS SCENE
+    #   sid, closer   each signal id and the agent who authority-closes it
+
     for sid, closer in (("a", "vp-1"), ("b", "vp-2"), ("c", "vp-1"), ("e", "vp-1")):
         to_review(sv, sid, signal_type=U)
         sv.attempt_closure(sid, closer, CUST)
@@ -303,8 +314,9 @@ def test_authority_compression_factor(sv):
 
 # ===========================================================================
 # SCENE 9 — ATTEMPTS ARE NOT RESOLUTIONS
-# Proves: attempted closure "does not constitute loop resolution" (line
-# 573), so it does not count as a closure in the score.
+# Proves: attempted closure "does not constitute loop resolution" (Layer 3,
+# Autonomy-Bounded Closure, Attempted Closure), so it does not count as a
+# closure in the score.
 # ===========================================================================
 
 def test_attempted_closures_do_not_count(sv):
@@ -315,6 +327,9 @@ def test_attempted_closures_do_not_count(sv):
     Enter:   sv   fixture
     Exit:    passes if closure_quality is 1.0 and open_loops is 0.0
     """
+    # PLAYERS IN THIS SCENE
+    #   f   the factor dict for decision "d"
+
     to_review(sv, "a", signal_type=U, closure_authority=["chief"])
     sv.attempt_closure("a", "outsider", CUST)
     decision(sv, "d", ["a"])
@@ -324,8 +339,8 @@ def test_attempted_closures_do_not_count(sv):
 
 # ===========================================================================
 # SCENE 10 — A LOOP THAT HAD TO BE REOPENED
-# Proves: line 942, how many times a loop was reopened
-# feeds the coherence score.
+# Proves: (Layer 4, Commitment State Machine) how many times a loop was
+# reopened feeds the coherence score.
 # ===========================================================================
 
 def test_reopen_history_feeds_the_score():
@@ -337,13 +352,15 @@ def test_reopen_history_feeds_the_score():
     Exit:    passes if the reopened node's score is lower
 
     Both nodes hold exactly two evidence closures, by lab-1 and lab-2, and
-    no open loops, so every D3 factor is equal between them. The only
+    no open loops, so every D3 factor would be equal between them. The only
     difference is that in `reopened` the first closure was invalidated and
-    superseded.
+    superseded, and closure_quality counts that reopen as a closure that
+    did not hold (2 / (2 + 1) instead of 2 / 2).
     """
     # PLAYERS IN THIS SCENE
     #   clean      two signals, each evidence-closed once
     #   reopened   one signal, closed, reopened, closed again
+    #   sid, lab   each of clean's signals and the lab that evidence-closes it
 
     clean, reopened = Supervisor(), Supervisor()
     for sid, lab in (("a", "lab-1"), ("b", "lab-2")):
