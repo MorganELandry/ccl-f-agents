@@ -42,9 +42,9 @@ Two things are abstracted to a yes/no: who produced the reversal evidence ("a te
 
 | Configuration | What varies | Bound | Result |
 |---|---|---|---|
-| `CommitmentStateMachine.cfg` (lifecycle) | the full signal lifecycle, two signals; decision fixed as irreversible, no relabels | log of 8 records | 45,694,483 distinct states, depth 9; no violation |
-| `Classes.cfg` (execution classes) | every class, reversal, refusal, relabel and review path; one signal | log of 7 records | 37,073,616 distinct states, depth 8; no violation |
-| `Chain.cfg` (Closure Chain depth) | two signals, s1's evidence depending on s2; no exits | log of 12 records | 12,382,235 distinct states, depth 13; no violation |
+| `CommitmentStateMachine.cfg` (lifecycle) | the full signal lifecycle, two signals; decision fixed as irreversible, no relabels | log of 8 records | 45,680,979 distinct states, depth 9; no violation |
+| `Classes.cfg` (execution classes) | every class, reversal, refusal, relabel and review path; one signal | log of 7 records | 37,072,736 distinct states, depth 8; no violation |
+| `Chain.cfg` (Closure Chain depth) | two signals, s1's evidence depending on s2; no exits | log of 12 records | 12,008,411 distinct states, depth 13; no violation |
 
 In the lifecycle configuration s1's evidence depends on s2. The lifecycle run's bound is too short for a reopen to weaken a closure downstream (that takes ten records), which is why `Chain.cfg` exists. Every property below is checked in all three configurations; the cycle case is checked by the tests (`CycleBack = TRUE`).
 
