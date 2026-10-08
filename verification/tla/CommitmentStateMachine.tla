@@ -11,14 +11,19 @@
 (*                                                                         *)
 (* What it covers: the transition table, the exits and their re-entry      *)
 (* rules, the Rule 8 recovery condition, the append-only audit log,        *)
-(* Rule 4 acceptance, the gates with their logged override, and Execution  *)
+(* Rule 4 acceptance, the gates with their logged override, Execution     *)
 (* Class Assignment (irreversible by default, tested reversal path,        *)
-(* logged reclassification, the relabel-after-refusal review).            *)
+(* logged reclassification, the relabel-after-refusal review), Closure    *)
+(* Chain (evidence depending on other loops; a reopen upstream weakens    *)
+(* every closure downstream, and is logged), and the decision-level        *)
+(* External Evidence Source.                                               *)
 (*                                                                         *)
-(* Two configurations check it (see README): CommitmentStateMachine.cfg    *)
-(* explores the signal lifecycle with two signals and a fixed irreversible *)
-(* decision; Classes.cfg explores every class, reversal and relabel path   *)
-(* with one signal. Every property is checked in both.                     *)
+(* Three configurations check it (see README): CommitmentStateMachine.cfg  *)
+(* explores the signal lifecycle with two signals, one depending on the    *)
+(* other, and a fixed irreversible decision; Classes.cfg explores every    *)
+(* class, reversal and relabel path with one signal; Chain.cfg goes deep   *)
+(* enough (no exits, a longer log) for a reopen to weaken a closure        *)
+(* downstream. Every property is checked in all three.                     *)
 (* What it does NOT cover: closure typing, coherence scoring and the       *)
 (* thresholds (see ../alloy and docs/DECISIONS.md). It checks the 0.2      *)
 (* automaton as written; it is not the 0.3 formal semantics.               *)
@@ -47,7 +52,11 @@ CONSTANTS Signals,        \* the signals in the model, e.g. {s1, s2}
           MaxLog,         \* bound on audit-log length, to keep the search finite
           DeclaredInit,   \* execution classes the decision may be registered with
           ReversalInit,   \* whether a tested reversal path may exist at registration
-          Reclassify      \* TRUE: explore relabels, refusals and the relabel review
+          Reclassify,     \* TRUE: explore relabels, refusals and the relabel review
+          UpFrom, UpTo,   \* Closure Chain: UpFrom's closing evidence depends on
+                          \* loop UpTo (a value outside Signals means no edge)
+          CycleBack,      \* TRUE: UpTo's evidence also depends on UpFrom (a cycle)
+          Exits           \* TRUE: explore loop exits (FALSE keeps Chain.cfg small)
 
 (***************************************************************************)
 (* SCENE 1 - THE VOCABULARY                                                *)
@@ -110,17 +119,19 @@ Transitions ==
 (*   everBlocked     some execution request on the decision was refused    *)
 (*   relabel         the relabel-after-refusal review: "none", "open" or   *)
 (*                   "resolved"                                            *)
+(*   accEES          the Rule 4 acceptance cites an External Evidence      *)
+(*                   Source (who produced it is abstracted away)           *)
 (*   executed        the irreversible decision has executed                *)
 (*   log             the audit log: a sequence of records                  *)
 (***************************************************************************)
 VARIABLES state, exitType, legal, cond, modelUpdate, accepted, executed, log,
-          declared, reversal, everBlocked, relabel
+          declared, reversal, everBlocked, relabel, accEES
 
 vars == <<state, exitType, legal, cond, modelUpdate, accepted, executed, log,
-          declared, reversal, everBlocked, relabel>>
+          declared, reversal, everBlocked, relabel, accEES>>
 
-\* The decision-class variables, for UNCHANGED clauses.
-classVars == <<declared, reversal, everBlocked, relabel>>
+\* The decision variables, for UNCHANGED clauses.
+classVars == <<declared, reversal, everBlocked, relabel, accEES>>
 
 Classes == {"routine", "elevated", "irreversible"}
 Rank == [c \in Classes |-> IF c = "routine" THEN 0 ELSE IF c = "elevated" THEN 1 ELSE 2]
@@ -142,12 +153,46 @@ Init == /\ state       = [s \in Signals |-> "unregistered"]
         /\ reversal    \in ReversalInit
         /\ everBlocked = FALSE
         /\ relabel     = "none"
+        /\ accEES      = FALSE
 
 \* Every log record has the same fields; unused ones hold "none".
 Rec(kind, sig, from, to) ==
   [kind |-> kind, sig |-> sig, from |-> from, to |-> to]
 
 Log(r) == log' = Append(log, r)
+
+\* The dependency edges <<s, u>>: "s's closing evidence depends on loop u".
+\* (TLC configuration files cannot write pairs, so they are built here.)
+Upstream == IF UpFrom \in Signals /\ UpTo \in Signals
+              THEN {<<UpFrom, UpTo>>} \cup (IF CycleBack THEN {<<UpTo, UpFrom>>} ELSE {})
+              ELSE {}
+
+\* Closure Chain, computed as the runtime computes it: start from no sound
+\* loops and repeatedly add every evidence-closed loop whose upstream loops
+\* are all sound already; |Signals| rounds reach the least fixed point, so
+\* a loop held up only by a cycle never counts. (One closing evidence item
+\* per loop: Upstream gives its dependencies.)
+RECURSIVE SoundIter(_, _, _)
+SoundIter(st, known, k) ==
+  IF k = 0 THEN known
+  ELSE SoundIter(st, {s \in Signals : st[s] = "closed_evidence"
+                                     /\ \A u \in Signals : <<s, u>> \in Upstream => u \in known},
+                 k - 1)
+SoundOf(st) == SoundIter(st, {}, Cardinality(Signals))
+Sound == SoundOf(state)
+
+\* The transitive closure of Upstream (for the cycle property).
+RECURSIVE TCIter(_, _)
+TCIter(R, k) == IF k = 0 THEN R
+                ELSE TCIter(R \cup {p \in Signals \X Signals :
+                                     \E b \in Signals : <<p[1], b>> \in R /\ <<b, p[2]>> \in R},
+                            k - 1)
+UpstreamTC == TCIter(Upstream, Cardinality(Signals))
+
+\* A set as a sequence, in some fixed order (for logging several records).
+RECURSIVE SetToSeq(_)
+SetToSeq(X) == IF X = {} THEN <<>>
+               ELSE LET x == CHOOSE x \in X : TRUE IN <<x>> \o SetToSeq(X \ {x})
 
 (***************************************************************************)
 (* SCENE 3 - THE STEPS                                                     *)
@@ -165,12 +210,19 @@ Move(s, t) ==
 
 \* "A closed loop cannot be silently reopened": the reopen is its own
 \* logged record (rationale, reopening agent, superseded closure).
+\* Closure Chain: every closure downstream that loses its standing because
+\* of this reopen is logged too ("the weakened link is logged").
 Reopen(s) ==
-  /\ state[s] \in Closed
-  /\ <<state[s], "under_review">> \in Transitions
-  /\ state' = [state EXCEPT ![s] = "under_review"]
-  /\ Log(Rec("reopen", s, state[s], "under_review"))
-  /\ UNCHANGED <<exitType, legal, cond, modelUpdate, accepted, executed>> /\ UNCHANGED classVars
+  LET after    == [state EXCEPT ![s] = "under_review"]
+      weakened == (Sound \ SoundOf(after)) \ {s}
+  IN /\ state[s] \in Closed
+     /\ <<state[s], "under_review">> \in Transitions
+     /\ Len(log) + 1 + Cardinality(weakened) <= MaxLog
+     /\ state' = after
+     /\ log' = log \o <<Rec("reopen", s, state[s], "under_review")>>
+                   \o [i \in 1..Cardinality(weakened) |->
+                         Rec("chain_weakened", SetToSeq(weakened)[i], "upstream", s)]
+     /\ UNCHANGED <<exitType, legal, cond, modelUpdate, accepted, executed>> /\ UNCHANGED classVars
 
 \* Rule 8: structural review documents a model update.
 DocumentModelUpdate(s) ==
@@ -194,6 +246,7 @@ Recover(s) ==
 \* containment, deferred or ambiguity exit may register a resolution
 \* condition (c), and no other exit type does.
 Exit(s, x, sub, c) ==
+  /\ Exits
   /\ state[s] \in OpenStates
   /\ (x = "legal") = (sub /= "none")
   /\ c => x \in WaitingExits
@@ -231,11 +284,14 @@ Reenter(s) ==
     /\ UNCHANGED <<modelUpdate, accepted, executed>> /\ UNCHANGED classVars
 
 \* Rule 4: someone explicitly accepts authorization, risk and rationale.
-Accept ==
+\* e: whether the acceptance cites an External Evidence Source.
+Accept(e) ==
   /\ ~accepted
   /\ accepted' = TRUE
+  /\ accEES' = e
   /\ Log(Rec("acceptance", "none", "none", "none"))
-  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, executed>> /\ UNCHANGED classVars
+  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, executed,
+                 declared, reversal, everBlocked, relabel>>
 
 \* Exits whose "Loop State After" leaves the loop open.
 LeavesOpen == {"containment", "recoverable", "delegated", "deferred", "forced",
@@ -251,9 +307,14 @@ IsOpen(s) == \/ state[s] \in OpenStates
 \* closures do not satisfy it (Reversibility Logic). Chain soundness and
 \* the decision-level EES requirement are not modeled here.
 ResolvingExits == {"terminal", "superseded"}
-GateOK == \A s \in Signals :
-            \/ state[s] = "closed_evidence"
-            \/ state[s] = "exited" /\ exitType[s] \in ResolvingExits
+\* Decision-level External Evidence Source: cited in the acceptance, or the
+\* qualifying evidence of a chain-sound evidence closure (which is EES by
+\* the definition of evidence closure).
+DecisionEES == accEES \/ Sound /= {}
+GateOK == /\ \A s \in Signals :
+               \/ s \in Sound
+               \/ state[s] = "exited" /\ exitType[s] \in ResolvingExits
+          /\ DecisionEES
 
 \* The elevated and routine gates, reduced the same way: routine needs
 \* every signal registered; elevated also needs each one at least
@@ -303,7 +364,7 @@ Refuse ==
   /\ everBlocked' = TRUE
   /\ Log(Rec("execution_blocked", "none", "none", "none"))
   /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, accepted, executed,
-                 declared, reversal, relabel>>
+                 declared, reversal, relabel, accEES>>
 
 \* Reclassify: change the declared class and/or the reversal support (new
 \* evidence, or evidence replaced). Logged. A lowering of the declared or
@@ -318,7 +379,8 @@ ReclassifyTo(c, r) ==
                     \/ Rank[Applied(c, r)] < Rank[AppliedNow]
      IN relabel' = IF lowered /\ everBlocked THEN "open" ELSE relabel
   /\ Log(Rec("decision_reclassified", "none", declared, c))
-  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, accepted, executed, everBlocked>>
+  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, accepted, executed, everBlocked,
+                 accEES>>
 
 \* Rule 8: the relabel review is resolved by a documented model update.
 ResolveRelabel ==
@@ -326,7 +388,7 @@ ResolveRelabel ==
   /\ relabel' = "resolved"
   /\ Log(Rec("model_update", "none", "relabel", "relabel"))
   /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, accepted, executed,
-                 declared, reversal, everBlocked>>
+                 declared, reversal, everBlocked, accEES>>
 
 Next ==
   /\ Len(log) < MaxLog
@@ -334,7 +396,8 @@ Next ==
      \/ \E s \in Signals : Reopen(s) \/ DocumentModelUpdate(s) \/ Recover(s) \/ Reenter(s)
      \/ \E s \in Signals, x \in ExitTypes, sub \in LegalSubtypes \cup {"none"}, c \in BOOLEAN :
           Exit(s, x, sub, c)
-     \/ Accept \/ Execute \/ Override \/ Refuse \/ ResolveRelabel
+     \/ \E e \in BOOLEAN : Accept(e)
+     \/ Execute \/ Override \/ Refuse \/ ResolveRelabel
      \/ \E c \in Classes, r \in BOOLEAN : ReclassifyTo(c, r)
 
 (***************************************************************************)
@@ -342,6 +405,30 @@ Next ==
 (* Invariants hold in every reachable state. Action properties ([][P]_v)  *)
 (* hold for every step.                                                    *)
 (***************************************************************************)
+
+\* Closure Chain: a loop that loses its standing is logged in the same step.
+ChainWeakeningLogged ==
+  [][\A w \in Signals :
+       (w \in Sound /\ w \notin SoundOf(state') /\ state'[w] = state[w])
+         => \E i \in Len(log) + 1 .. Len(log') :
+              log'[i].kind = "chain_weakened" /\ log'[i].sig = w]_vars
+
+\* "A loop cannot be its own upstream, directly or through others":
+\* a loop on a dependency cycle is never sound.
+CycleNeverSound == \A s \in Signals : <<s, s>> \in UpstreamTC => s \notin Sound
+
+\* Sound loops are evidence-closed all the way up.
+SoundAllTheWayUp ==
+  \A s \in Sound : state[s] = "closed_evidence"
+                    /\ \A u \in Signals : <<s, u>> \in Upstream => u \in Sound
+
+\* The irreversible gate never passes cleanly over an evidence closure
+\* whose chain is broken, or without an External Evidence Source.
+NoCleanPassOverBrokenChain ==
+  [][(~executed /\ executed' /\ log'[Len(log')].kind = "execution_permitted"
+      /\ AppliedNow = "irreversible")
+       => /\ \A s \in Signals : state[s] = "closed_evidence" => s \in Sound
+          /\ DecisionEES]_vars
 
 TypeOK ==
   /\ state \in [Signals -> States]
@@ -352,6 +439,7 @@ TypeOK ==
   /\ accepted \in BOOLEAN /\ executed \in BOOLEAN
   /\ declared \in Classes /\ reversal \in BOOLEAN /\ everBlocked \in BOOLEAN
   /\ relabel \in {"none", "open", "resolved"}
+  /\ accEES \in BOOLEAN
 
 \* Blocked 1: a signal cannot be closed before it is classified.
 NoCloseBeforeClassified ==
@@ -369,7 +457,8 @@ NoSilentCloseFromSuppressed ==
 NoSilentReopen ==
   [][\A s \in Signals :
        (state[s] \in Closed /\ state'[s] = "under_review")
-         => log'[Len(log')] = Rec("reopen", s, state[s], "under_review")]_vars
+         => \E i \in Len(log) + 1 .. Len(log') :
+              log'[i] = Rec("reopen", s, state[s], "under_review")]_vars
 
 \* Rules 7-8: an escalated signal leaves only for review, and only after a
 \* documented model update (or by exit).

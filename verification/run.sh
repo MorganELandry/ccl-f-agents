@@ -7,7 +7,7 @@
 #
 # Usage:   bash verification/run.sh          (from the repository root)
 # Needs:   Java 17+, curl, Python with the repo's requirements installed.
-# Time:    about 30 minutes, almost all of it the two TLC runs.
+# Time:    about 2 hours, almost all of it the four TLC runs.
 # ===========================================================================
 set -euo pipefail
 
@@ -33,17 +33,27 @@ fetch "$TLA_URL" "$TLA_SHA" "$TOOLS/tla2tools.jar"
 fetch "$ALLOY_URL" "$ALLOY_SHA" "$TOOLS/alloy.jar"
 export TLA2TOOLS_JAR="$TOOLS/tla2tools.jar" ALLOY_JAR="$TOOLS/alloy.jar"
 
-# --- Scene 2: TLC, both configurations ---------------------------------------
+# --- Scene 2: TLC, every configuration --------------------------------------
 # CommitmentStateMachine.cfg: the signal lifecycle (two signals, MaxLog 8).
 # Classes.cfg: execution class assignment (one signal, MaxLog 7).
+# Chain.cfg: Closure Chain deep enough for a reopen to weaken (MaxLog 12).
 echo "== TLC: CommitmentStateMachine, lifecycle configuration (MaxLog = 8)"
 ( cd "$HERE/tla" && java -XX:+UseParallelGC -jar "$TLA2TOOLS_JAR" -workers auto \
     -config CommitmentStateMachine.cfg -metadir "$TOOLS/tlc-states" \
+    CommitmentStateMachine.tla | grep -E "states generated|No error|violated|Error" )
+echo "== TLC: CommitmentStateMachine, Closure Chain configuration (MaxLog = 12)"
+( cd "$HERE/tla" && java -XX:+UseParallelGC -jar "$TLA2TOOLS_JAR" -workers auto \
+    -config Chain.cfg -metadir "$TOOLS/tlc-states-chain" \
     CommitmentStateMachine.tla | grep -E "states generated|No error|violated|Error" )
 echo "== TLC: CommitmentStateMachine, execution-class configuration (MaxLog = 7)"
 ( cd "$HERE/tla" && java -XX:+UseParallelGC -jar "$TLA2TOOLS_JAR" -workers auto \
     -config Classes.cfg -metadir "$TOOLS/tlc-states-classes" \
     CommitmentStateMachine.tla | grep -E "states generated|No error|violated|Error" )
+# Federation.cfg: three nodes, B may fork and lie, B's evidence rests on C.
+echo "== TLC: FederatedClosure (histories of 3 events, A's log of 6)"
+( cd "$HERE/tla" && java -XX:+UseParallelGC -jar "$TLA2TOOLS_JAR" -workers auto \
+    -config Federation.cfg -metadir "$TOOLS/tlc-states-fed" \
+    FederatedClosure.tla | grep -E "states generated|No error|violated|Error" )
 
 # --- Scene 3: every Alloy command (checks UNSAT, runs SAT) -------------------
 echo "== Alloy: closure_and_architecture"

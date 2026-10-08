@@ -224,3 +224,4 @@ __marimo__/
 
 # Formal verification tool cache (verification/run.sh)
 verification/.tools/
+verification/tla/*_TTrace_*

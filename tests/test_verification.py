@@ -1,7 +1,7 @@
 """
 THE MODELS AND THE CODE AGREE
-A Play in Nine Scenes
-=============================
+A Play in Fourteen Scenes
+===============================
 
 PROLOGUE
 --------
@@ -32,6 +32,15 @@ THE PLAYBILL
     Scene 8  test_tlc_catches_the_old_authority_gate (needs Java + TLA2TOOLS_JAR)
     Scene 9  test_tlc_catches_execution_class_faults (needs Java + TLA2TOOLS_JAR;
                                                       parametrized, 4 runs)
+    Scene 10 test_alloy_catches_planted_faults       (needs Java + ALLOY_JAR;
+                                                      parametrized, 3 runs)
+    Scene 11 test_tlc_catches_chain_and_ees_faults   (needs Java + TLA2TOOLS_JAR;
+                                                      parametrized, 4 runs)
+    Scene 12 test_tlc_federation_holds               (needs Java + TLA2TOOLS_JAR)
+    Scene 13 test_tlc_federation_is_not_vacuous      (needs Java + TLA2TOOLS_JAR;
+                                                      parametrized, 3 runs)
+    Scene 14 test_tlc_catches_federation_faults      (needs Java + TLA2TOOLS_JAR;
+                                                      parametrized, 9 runs)
 
 READER'S NOTE — regular expressions
     re.findall(r'<<"(\\w+)", "(\\w+)">>', text) finds every TLA+ pair such as
@@ -81,10 +90,12 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # TLA_FILE, ALLOY_FILE — the two model files.
 TLA_FILE = ROOT / "verification" / "tla" / "CommitmentStateMachine.tla"
+FED_FILE = ROOT / "verification" / "tla" / "FederatedClosure.tla"
 ALLOY_FILE = ROOT / "verification" / "alloy" / "closure_and_architecture.als"
 
 # TLA_TEXT, ALLOY_TEXT — their contents, read once.
 TLA_TEXT = TLA_FILE.read_text()
+FED_TEXT = FED_FILE.read_text()
 ALLOY_TEXT = ALLOY_FILE.read_text()
 
 # PAIR — the pattern for one TLA+ pair of strings, <<"a", "b">>.
@@ -110,6 +121,109 @@ FAST_CFG = (Path(TLA_FILE.with_suffix(".cfg")).read_text()
 #   relabel, review and execute, and quick enough for a test.
 CLASSES_CFG = ((TLA_FILE.parent / "Classes.cfg").read_text()
                .replace("MaxLog = 7", "MaxLog = 6"))
+
+# CHAIN_CFG, CYCLE_CFG — the Closure Chain configuration at a 10-record log
+#   (deep enough for a reopen upstream to weaken a closure downstream), and
+#   the lifecycle configuration with the dependency made a cycle.
+CHAIN_CFG = ((TLA_FILE.parent / "Chain.cfg").read_text()
+             .replace("MaxLog = 12", "MaxLog = 10"))
+CYCLE_CFG = FAST_CFG.replace("MaxLog = 5", "MaxLog = 6").replace("CycleBack = FALSE",
+                                                                 "CycleBack = TRUE")
+
+# FED_CFG — the federation configuration at small bounds (histories of 2
+#   events, 5 records in A's log): seconds, not the full run's minutes.
+FED_CFG = ((FED_FILE.parent / "Federation.cfg").read_text()
+           .replace("MaxLen = 3", "MaxLen = 2").replace("MaxALog = 6", "MaxALog = 5"))
+
+# FED_WITNESSES — Scene 13: invariants that must FAIL, showing that
+#   acceptance, withdrawal and fork detection all really happen.
+FED_WITNESSES = ["NeverAccepts", "NeverWithdraws", "NeverCatchesFork"]
+
+# FED_FAULTS — planted faults for Scene 14: name -> (current text, planted
+#   text, the properties of which TLC must report one violated). Each
+#   weakens what node A checks; the property it breaks is stated apart
+#   from the check (Grounded, not Verified).
+FED_FAULTS = {
+    "ignore-the-third-node": (
+        '    /\\ BDependsOnC => ("C" \\notin eq /\\ Seen("C", v) = "ok")',
+        "    /\\ TRUE",
+        ("LocalClosureOnlyWhenGrounded",)),
+    "accept-unverified-evidence": (
+        '    /\\ Seen("B", v) = "ok"',
+        '    /\\ Seen("B", v) \\in Closes',
+        ("LocalClosureOnlyWhenGrounded",)),
+    "no-recheck": (
+        '    IF mirror = "closed" /\\ ~Verified(v, eq)',
+        "    IF FALSE",
+        ("LocalClosureOnlyWhenGrounded", "EquivocatorNeverRelied")),
+    "no-fork-detection": (
+        "    /\\ IF view[p].h /= 0 /\\ Pref(p, h, view[p].n) /= Pref(p, view[p].h, view[p].n)",
+        "    /\\ IF FALSE",
+        ("NoHistorySwitch",)),
+    "rollback-accepted": (
+        "    /\\ view[p].h /= 0 => n >= view[p].n                 \\* rollback refused\n",
+        "",
+        ("NoRollback", "NoFalseAccusation")),
+    "trust-an-equivocator": (
+        '    /\\ "B" \\notin eq\n',
+        "",
+        ("EquivocatorNeverRelied", "LocalClosureOnlyWhenGrounded")),
+    "a-writes-the-peers-log": (       # A "repairs" B's log while accepting
+        "    /\\ UNCHANGED <<logs, view, equiv>>",
+        "    /\\ logs' = [logs EXCEPT ![\"B\"][1] = Append(@, \"reopen\")]\n"
+        "    /\\ UNCHANGED <<view, equiv>>",
+        ("NodeIsolation",)),
+    "one-write-moves-two-nodes": (    # B's write also changes C's history
+        "    /\\ logs' = [logs EXCEPT ![p][h] = Append(@, e)]",
+        "    /\\ logs' = [logs EXCEPT ![p][h] = Append(@, e), ![\"C\"][2] = <<\"reg\">>]",
+        ("NodeIsolation",)),
+    "silent-withdrawal": (
+        '         /\\ alog\' = alog \\o <<entry, "withdrawn">>',
+        "         /\\ alog' = Append(alog, entry)",
+        ("WithdrawalLogged",)),
+}
+
+# CHAIN_FAULTS — planted faults for Scene 11: name -> (current text, planted
+#   text, configuration, the property TLC must report violated).
+CHAIN_FAULTS = {
+    "ignore-upstream": (
+        '  ELSE SoundIter(st, {s \\in Signals : st[s] = "closed_evidence"\n'
+        '                                     /\\ \\A u \\in Signals : <<s, u>> \\in Upstream'
+        ' => u \\in known},',
+        '  ELSE SoundIter(st, {s \\in Signals : st[s] = "closed_evidence"},',
+        "chain", "SoundAllTheWayUp"),
+    "ignore-upstream-on-a-cycle": (
+        '  ELSE SoundIter(st, {s \\in Signals : st[s] = "closed_evidence"\n'
+        '                                     /\\ \\A u \\in Signals : <<s, u>> \\in Upstream'
+        ' => u \\in known},',
+        '  ELSE SoundIter(st, {s \\in Signals : st[s] = "closed_evidence"},',
+        "cycle", "CycleNeverSound"),
+    "silent-weakening": (
+        "      weakened == (Sound \\ SoundOf(after)) \\ {s}",
+        "      weakened == {}",
+        "chain", "ChainWeakeningLogged"),
+    "no-ees-required": (
+        "          /\\ DecisionEES\n",
+        "\n",
+        "classes", "NoCleanPassOverBrokenChain"),
+}
+
+# ALLOY_FAULTS — planted faults for Scene 10: name -> (current text,
+#   planted text, the assertion the Analyzer must find a counterexample to).
+ALLOY_FAULTS = {
+    "chain-from-everything": (          # greatest instead of least fixed point
+        "  no stepord/first.snd\n",
+        "  stepord/first.snd = Signal\n",
+        "SelfSupportNeverSound"),
+    "reversal-ignores-setters": (       # the class-setter may vouch for the path
+        "e.kind in EESKinds and e.producer not in d.setters + d.acceptor + d.loops.evaluated",
+        "e.kind in EESKinds and e.producer not in d.acceptor + d.loops.evaluated",
+        "NoSelfCertifiedReversal"),
+    "acceptor-may-supply-ees": (        # the acceptor's own evidence counts
+        "e.kind in EESKinds and e.producer not in d.loops.evaluated + d.acceptor",
+        "e.kind in EESKinds and e.producer not in d.loops.evaluated",
+        "AcceptorCannotSupplyTheEES"),
+}
 
 # CLASS_FAULTS — planted faults for Scene 9: name -> (current text, planted
 #   text, the property TLC must report violated).
@@ -315,6 +429,12 @@ def test_tlc_finds_no_violation(tmp_path):
     result = run_tlc(TLA_FILE, CLASSES_CFG.replace("MaxLog = 6", "MaxLog = 5"),
                      tmp_path / "classes")
     assert "No error has been found" in result.stdout, result.stdout[-3000:]
+    # The Closure Chain configuration at a 9-record log, and the cycle.
+    result = run_tlc(TLA_FILE, CHAIN_CFG.replace("MaxLog = 10", "MaxLog = 9"),
+                     tmp_path / "chain")
+    assert "No error has been found" in result.stdout, result.stdout[-3000:]
+    result = run_tlc(TLA_FILE, CYCLE_CFG, tmp_path / "cycle")
+    assert "No error has been found" in result.stdout, result.stdout[-3000:]
 
 
 # ===========================================================================
@@ -368,7 +488,9 @@ def test_alloy_assertions_hold(tmp_path):
     # Alloy prints its per-command summary on stderr, so read both streams.
     lines = [l.strip() for l in (result.stdout + result.stderr).splitlines()
              if re.match(r"\s*\d+\. (check|run) ", l)]
-    assert len(lines) == 12, result.stdout + result.stderr
+    # One summary line per command in the file (each starts with check or run).
+    expected_count = len(re.findall(r"^(?:check|run) ", ALLOY_TEXT, re.M))
+    assert len(lines) == expected_count, result.stdout + result.stderr
     for line in lines:
         expected = "UNSAT" if line.split()[1] == "check" else "SAT"
         assert line.split()[-1] == expected, line
@@ -395,10 +517,10 @@ def test_tlc_catches_the_old_authority_gate(tmp_path):
     #   mutant, cfg          the planted model and its one-signal configuration
     #   result               TLC's run
 
-    new_gate = ('GateOK == \\A s \\in Signals :\n'
-                '            \\/ state[s] = "closed_evidence"\n'
-                '            \\/ state[s] = "exited" /\\ exitType[s] \\in ResolvingExits')
-    old_gate = 'GateOK == \\A s \\in Signals : state[s] /= "unregistered" /\\ ~IsOpen(s)'
+    new_gate = ('GateOK == /\\ \\A s \\in Signals :\n'
+                '               \\/ s \\in Sound\n'
+                '               \\/ state[s] = "exited" /\\ exitType[s] \\in ResolvingExits')
+    old_gate = 'GateOK == /\\ \\A s \\in Signals : state[s] /= "unregistered" /\\ ~IsOpen(s)'
     assert new_gate in TLA_TEXT
     mutant = tmp_path / "src" / TLA_FILE.name
     mutant.parent.mkdir()
@@ -440,5 +562,145 @@ def test_tlc_catches_execution_class_faults(tmp_path, fault):
     mutant.write_text(TLA_TEXT.replace(current, planted))
     result = run_tlc(mutant, CLASSES_CFG, tmp_path)
     assert f"{prop} is violated" in result.stdout, result.stdout[-3000:]
+
+
+# ===========================================================================
+# SCENE 10 — THE ANALYZER CATCHES WHAT IT SHOULD
+# Proves: the Closure Chain and decision-level assertions are not vacuous.
+#   Computing soundness from every loop instead of from none lets a
+#   self-supporting loop count; letting the class-setter vouch for a
+#   reversal path, or the acceptor supply the decision's External Evidence
+#   Source, each breaks its assertion.
+# ===========================================================================
+
+@needs_alloy
+@pytest.mark.parametrize("fault", list(ALLOY_FAULTS))
+def test_alloy_catches_planted_faults(tmp_path, fault):
+    """
+    Plant one fault in a copy of the Alloy model; its assertion must fail.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+             fault      a key of ALLOY_FAULTS
+    Exit:    passes if the Analyzer reports that check satisfiable (a
+             counterexample exists)
+    """
+    # PLAYERS IN THIS SCENE
+    #   current, planted, name   the fault's three parts
+    #   mutant                   the planted copy of the model
+    #   result                   the Alloy run
+    #   line                     the summary line for that check
+
+    current, planted, name = ALLOY_FAULTS[fault]
+    assert current in ALLOY_TEXT, fault
+    mutant = tmp_path / ALLOY_FILE.name
+    mutant.write_text(ALLOY_TEXT.replace(current, planted))
+    result = subprocess.run(
+        ["java", "-jar", ALLOY, "exec", "-f", "-c", name, "-o", str(tmp_path / "out"),
+         str(mutant)], capture_output=True, text=True, timeout=600)
+    line = next(l for l in (result.stdout + result.stderr).splitlines()
+                if re.search(rf"check {name}\b", l))
+    assert line.split()[-1] == "SAT", line
+
+
+# ===========================================================================
+# SCENE 11 — A BROKEN CHAIN, A SILENT LOSS, A GATE WITH NO WITNESS
+# Proves: the Closure Chain and decision-level EES properties can fail.
+#   Ignoring upstream loops breaks SoundAllTheWayUp (and, on a cycle,
+#   CycleNeverSound); not logging a weakened closure breaks
+#   ChainWeakeningLogged; dropping the EES requirement from the gate breaks
+#   NoCleanPassOverBrokenChain.
+# ===========================================================================
+
+@needs_tlc
+@pytest.mark.parametrize("fault", list(CHAIN_FAULTS))
+def test_tlc_catches_chain_and_ees_faults(tmp_path, fault):
+    """
+    Plant one chain or EES fault; TLC must name the property it breaks.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+             fault      a key of CHAIN_FAULTS
+    Exit:    passes if TLC reports that property violated
+    """
+    # PLAYERS IN THIS SCENE
+    #   current, planted, which, prop   the fault's four parts
+    #   cfg                             the configuration it runs under
+    #   mutant                          the planted copy of the model
+    #   result                          TLC's run
+
+    current, planted, which, prop = CHAIN_FAULTS[fault]
+    assert current in TLA_TEXT, fault
+    cfg = {"chain": CHAIN_CFG, "cycle": CYCLE_CFG, "classes": CLASSES_CFG}[which]
+    mutant = tmp_path / "src" / TLA_FILE.name
+    mutant.parent.mkdir()
+    mutant.write_text(TLA_TEXT.replace(current, planted))
+    result = run_tlc(mutant, cfg, tmp_path)
+    assert f"{prop} is violated" in result.stdout, result.stdout[-3000:]
+
+# ===========================================================================
+# SCENE 12 — THE FEDERATION HOLDS
+# Proves: at small bounds, every federation property holds, against a node
+# that forks and lies and an adversarial network.
+# ===========================================================================
+
+@needs_tlc
+def test_tlc_federation_holds(tmp_path):
+    """
+    Run TLC on FederatedClosure.tla at small bounds.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+    Exit:    passes if TLC finds no violation
+    """
+    result = run_tlc(FED_FILE, FED_CFG, tmp_path)
+    assert "No error has been found" in result.stdout, result.stdout[-3000:]
+
+
+# ===========================================================================
+# SCENE 13 — THE FEDERATION IS NOT VACUOUS
+# Proves: A really does accept, withdraw and catch forks in some run, so the
+# properties of Scene 12 constrain something.
+# ===========================================================================
+
+@needs_tlc
+@pytest.mark.parametrize("witness", FED_WITNESSES)
+def test_tlc_federation_is_not_vacuous(tmp_path, witness):
+    """
+    Add a witness invariant ("this never happens"); TLC must refute it.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+             witness    one of FED_WITNESSES
+    Exit:    passes if TLC reports the witness violated
+    """
+    cfg = FED_CFG.replace("INVARIANTS\n", f"INVARIANTS\n    {witness}\n")
+    result = run_tlc(FED_FILE, cfg, tmp_path)
+    assert f"{witness} is violated" in result.stdout, result.stdout[-3000:]
+
+
+# ===========================================================================
+# SCENE 14 — WEAKEN A CHECK, BREAK A PROPERTY
+# Proves: each of A's checks is needed. Removing it lets TLC find a run in
+# which the federation goes wrong.
+# ===========================================================================
+
+@needs_tlc
+@pytest.mark.parametrize("fault", list(FED_FAULTS))
+def test_tlc_catches_federation_faults(tmp_path, fault):
+    """
+    Plant one fault in the federation model; TLC must report a violation.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+             fault      a key of FED_FAULTS
+    Exit:    passes if TLC reports one of the fault's properties violated
+    """
+    # PLAYERS IN THIS SCENE
+    #   current, planted, props   the fault's parts
+    #   mutant, result            the planted copy and TLC's run
+
+    current, planted, props = FED_FAULTS[fault]
+    assert current in FED_TEXT, fault
+    mutant = tmp_path / "src" / FED_FILE.name
+    mutant.parent.mkdir()
+    mutant.write_text(FED_TEXT.replace(current, planted))
+    result = run_tlc(mutant, FED_CFG, tmp_path)
+    assert any(f"{p} is violated" in result.stdout for p in props), result.stdout[-3000:]
 
 # EXEUNT — end of file.
