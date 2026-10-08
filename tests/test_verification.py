@@ -1,6 +1,6 @@
 """
 THE MODELS AND THE CODE AGREE
-A Play in Eight Scenes
+A Play in Nine Scenes
 =============================
 
 PROLOGUE
@@ -30,6 +30,8 @@ THE PLAYBILL
     Scene 6  test_tlc_catches_a_forbidden_transition (needs Java + TLA2TOOLS_JAR)
     Scene 7  test_alloy_assertions_hold              (needs Java + ALLOY_JAR)
     Scene 8  test_tlc_catches_the_old_authority_gate (needs Java + TLA2TOOLS_JAR)
+    Scene 9  test_tlc_catches_execution_class_faults (needs Java + TLA2TOOLS_JAR;
+                                                      parametrized, 4 runs)
 
 READER'S NOTE — regular expressions
     re.findall(r'<<"(\\w+)", "(\\w+)">>', text) finds every TLA+ pair such as
@@ -65,7 +67,9 @@ from pathlib import Path
 import pytest
 
 from cclf.statemachine import OPEN_STATES, TRANSITIONS, reentry_allowed
-from cclf.types import EES_ELIGIBLE_KINDS, EXIT_LEAVES_LOOP_OPEN, ExitType, LegalSubtype
+from cclf.types import (
+    EES_ELIGIBLE_KINDS, EXIT_LEAVES_LOOP_OPEN, ExecutionClass, ExitType, LegalSubtype,
+)
 
 
 # ===========================================================================
@@ -101,6 +105,34 @@ needs_alloy = pytest.mark.skipif(not (shutil.which("java") and ALLOY),
 FAST_CFG = (Path(TLA_FILE.with_suffix(".cfg")).read_text()
             .replace("MaxLog = 8", "MaxLog = 5"))
 
+# CLASSES_CFG — the execution-class configuration (one signal, every class,
+#   relabels allowed) at a 6-record log: deep enough for register, refuse,
+#   relabel, review and execute, and quick enough for a test.
+CLASSES_CFG = ((TLA_FILE.parent / "Classes.cfg").read_text()
+               .replace("MaxLog = 7", "MaxLog = 6"))
+
+# CLASS_FAULTS — planted faults for Scene 9: name -> (current text, planted
+#   text, the property TLC must report violated).
+CLASS_FAULTS = {
+    "trust-the-declared-class": (
+        'Applied(d, r) == IF d = "irreversible" \\/ r THEN d ELSE "irreversible"',
+        'Applied(d, r) == d',
+        "LowerClassNeedsReversal"),
+    "no-relabel-review": (
+        'IN relabel\' = IF lowered /\\ everBlocked THEN "open" ELSE relabel',
+        "IN relabel' = relabel",
+        "RelabelAfterRefusalEscalates"),
+    "override-past-the-review": (
+        "  /\\ accepted /\\ ~executed /\\ ~RelabelOpen /\\ ~GateFor(AppliedNow)",
+        "  /\\ accepted /\\ ~executed /\\ ~GateFor(AppliedNow)",
+        "NoExecutionWhileRelabelOpen"),
+    "lowering-means-declared-only": (
+        "  /\\ LET lowered == \\/ Rank[c] < Rank[declared]\n"
+        "                    \\/ Rank[Applied(c, r)] < Rank[AppliedNow]",
+        "  /\\ LET lowered == Rank[c] < Rank[declared]",
+        "RelabelAfterRefusalEscalates"),
+}
+
 
 # ===========================================================================
 # SCENE 0 — THE STAGEHANDS (helpers used by the scenes below)
@@ -134,6 +166,7 @@ def run_tlc(tla: Path, cfg_text: str, workdir: Path) -> subprocess.CompletedProc
     # PLAYERS IN THIS SCENE
     #   model, cfg   the copied model and the written configuration
 
+    workdir.mkdir(parents=True, exist_ok=True)
     model = workdir / tla.name
     model.write_text(tla.read_text())
     cfg = workdir / "model.cfg"
@@ -175,7 +208,8 @@ def test_tla_transition_table_matches_code():
 
 def test_tla_open_states_and_exit_groups_match_code():
     """
-    OpenStates, ExitTypes and LeavesOpen agree with the code.
+    OpenStates, ExitTypes, LeavesOpen, LegalSubtypes and Classes agree
+    with the code.
 
     Enter:   (nothing)
     Exit:    passes if each pair of sets is identical
@@ -184,6 +218,7 @@ def test_tla_open_states_and_exit_groups_match_code():
     assert tla_set("ExitTypes") == {x.value for x in ExitType}
     assert tla_set("LeavesOpen") == {x.value for x in EXIT_LEAVES_LOOP_OPEN}
     assert tla_set("LegalSubtypes") == {s.value for s in LegalSubtype}
+    assert tla_set("Classes") == {c.value for c in ExecutionClass}
 
 
 # ===========================================================================
@@ -274,7 +309,11 @@ def test_tlc_finds_no_violation(tmp_path):
     Enter:   tmp_path   pytest's per-test scratch directory
     Exit:    passes if TLC reports "No error has been found"
     """
-    result = run_tlc(TLA_FILE, FAST_CFG, tmp_path)
+    result = run_tlc(TLA_FILE, FAST_CFG, tmp_path / "lifecycle")
+    assert "No error has been found" in result.stdout, result.stdout[-3000:]
+    # The execution-class configuration, at a 5-record log.
+    result = run_tlc(TLA_FILE, CLASSES_CFG.replace("MaxLog = 6", "MaxLog = 5"),
+                     tmp_path / "classes")
     assert "No error has been found" in result.stdout, result.stdout[-3000:]
 
 
@@ -368,5 +407,38 @@ def test_tlc_catches_the_old_authority_gate(tmp_path):
            .replace("MaxLog = 8", "MaxLog = 6").replace("Signals = {s1, s2}", "Signals = {s1}"))
     result = run_tlc(mutant, cfg, tmp_path)
     assert "NoCleanPassOverAuthorityClosure is violated" in result.stdout, result.stdout[-3000:]
+
+
+# ===========================================================================
+# SCENE 9 — FOUR WAYS TO RELABEL YOUR WAY PAST THE GATE
+# Proves: each Execution Class Assignment property can fail. Planting each
+#   fault in a copy of the model makes TLC report the matching property
+#   violated: trusting the declared class (LowerClassNeedsReversal), never
+#   opening the relabel review, letting an override past it, and counting
+#   only declared-class lowerings (RelabelAfterRefusalEscalates for both).
+# ===========================================================================
+
+@needs_tlc
+@pytest.mark.parametrize("fault", list(CLASS_FAULTS))
+def test_tlc_catches_execution_class_faults(tmp_path, fault):
+    """
+    Plant one execution-class fault; TLC must name the property it breaks.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+             fault      a key of CLASS_FAULTS
+    Exit:    passes if TLC reports that property violated
+    """
+    # PLAYERS IN THIS SCENE
+    #   current, planted, prop   the fault's three parts
+    #   mutant                   the planted copy of the model
+    #   result                   TLC's run
+
+    current, planted, prop = CLASS_FAULTS[fault]
+    assert current in TLA_TEXT, fault
+    mutant = tmp_path / "src" / TLA_FILE.name
+    mutant.parent.mkdir()
+    mutant.write_text(TLA_TEXT.replace(current, planted))
+    result = run_tlc(mutant, CLASSES_CFG, tmp_path)
+    assert f"{prop} is violated" in result.stdout, result.stdout[-3000:]
 
 # EXEUNT — end of file.

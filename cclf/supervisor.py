@@ -1250,6 +1250,10 @@ class Supervisor:
         #   attempted   True if the closer is outside the closure authority
         #   record      the ClosureRecord ("C<n>")
         #   target      the closed commitment state matching ctype
+        #   chain_ok    for an evidence closure, whether it is chain-sound
+        #               (None for other closure types)
+        #   broken      upstream loops of its qualifying evidence that are not
+        #               chain-sound (the broken links)
         #   d           each registered decision, when checking authority counts
 
         signal_id = sig.signal_id
@@ -1274,9 +1278,20 @@ class Supervisor:
         target = {ClosureType.EVIDENCE: S.CLOSED_EVIDENCE,
                   ClosureType.AUTHORITY: S.CLOSED_AUTHORITY,
                   ClosureType.ROLE_SWITCH: S.CLOSED_ROLE_SWITCH}[ctype]
+        # Closure Chain: an evidence closure that is not chain-sound is
+        # "recorded as an evidence closure, with the broken link shown in
+        # the record". broken_links names each upstream loop of the
+        # qualifying evidence that is not itself chain-sound right now.
+        chain_ok, broken = None, []
+        if ctype == ClosureType.EVIDENCE:
+            chain_ok = self._closure_sound(record, sig, frozenset())
+            broken = sorted({up for ev in self._qualifying(record, sig)
+                             for up in ev.depends_on
+                             if not self._signal_sound(up, frozenset({signal_id}))})
         self._move(sig, target, by, closure_type=ctype, record=record.record_id,
                    qualifying_evidence=qualifying, cited_evidence=list(evidence_ids),
-                   rationale=rationale, flagged=ctype != ClosureType.EVIDENCE)
+                   rationale=rationale, flagged=ctype != ClosureType.EVIDENCE,
+                   chain_sound=chain_ok, broken_links=broken)
         sig.closures.append(record)
 
         # --- Escalation: role-switch closure on a constraint signal --------
@@ -1554,7 +1569,8 @@ class Supervisor:
         """
         # PLAYERS IN THIS SCENE
         #   sig        the signal
-        #   ok, reason (may exit?, rule or blocking reason)
+        #   ok, reason (may exit?, rule or blocking reason); the first unmet
+        #              obligation, if any, replaces them
         #   record     the new ExitRecord
         #   previous   the state before the exit (logged as "from")
 
@@ -1563,19 +1579,27 @@ class Supervisor:
         sig = self._signal(signal_id)
         # --- Only open signals can exit ------------------------------------
         ok, reason = exit_allowed(sig.state)
-        if not ok:
-            raise TransitionRefused(reason)
         # --- The exit type's audit obligations -----------------------------
-        if exit_type in EXIT_TYPES_REQUIRING_OPEN_STATE_NOTE and not open_loop_state:
-            raise TransitionRefused(f"{exit_type.value} exit requires explicit notation of "
-                                    "the open loop state at the time of exit")
-        if exit_type == ExitType.DELEGATED and not successor:
-            raise TransitionRefused("delegated exit requires successor registration")
-        if exit_type == ExitType.WHISTLEBLOWER and not (external_pathway and suppression_ref):
-            raise TransitionRefused("whistleblower exit requires the external pathway and the "
-                                    "suppression event that triggered it")
-        if exit_type == ExitType.LEGAL and legal_subtype is None:
-            raise TransitionRefused("legal exit requires its sub-type")
+        # The first unmet one becomes the refusal reason.
+        if ok and exit_type in EXIT_TYPES_REQUIRING_OPEN_STATE_NOTE and not open_loop_state:
+            ok, reason = False, (f"{exit_type.value} exit requires explicit notation of "
+                                 "the open loop state at the time of exit")
+        if ok and exit_type == ExitType.DELEGATED and not successor:
+            ok, reason = False, "delegated exit requires successor registration"
+        if ok and exit_type == ExitType.WHISTLEBLOWER and not (external_pathway
+                                                              and suppression_ref):
+            ok, reason = False, ("whistleblower exit requires the external pathway and the "
+                                 "suppression event that triggered it")
+        if ok and exit_type == ExitType.LEGAL and legal_subtype is None:
+            ok, reason = False, "legal exit requires its sub-type"
+        # --- A refused exit is logged, like a refused transition -----------
+        # "An unregistered exit is structurally equivalent to a suppressed
+        # signal": an attempted exit that fails its obligations stays on
+        # the record too.
+        if not ok:
+            self._log("EXIT_REFUSED", by, signal=signal_id, exit_type=exit_type,
+                      state=sig.state, reason=reason)
+            raise TransitionRefused(reason)
         # --- Build the record ----------------------------------------------
         # When no note was given, the commitment state's name is stored as
         # the open loop state (`a or b` picks b when a is "").
@@ -1717,10 +1741,10 @@ class Supervisor:
 
         IMPLEMENTATION DECISION (one open review per condition and scope):
         if an unresolved review already exists for the same condition and
-        scope, the new signals are added to it and no new review or
-        ESCALATION entry is created. In that case no signal is moved now,
-        even one that is under_review: a newly added signal is escalated
-        only when it next enters review (ACT VI, Scene 2).
+        scope, the new signals are added to it, a REVIEW_JOINED entry is
+        logged instead of a new ESCALATION, and any added signal that is
+        under_review is escalated at once; the others escalate when they
+        reach review (ACT VI, Scene 2).
 
         For a new review, only the named signals currently under_review are
         moved to `escalated` now. Others named by the review are escalated
@@ -1728,6 +1752,7 @@ class Supervisor:
         """
         # PLAYERS IN THIS SCENE
         #   existing   each review already on file
+        #   added      named signals not yet on that review
         #   sid        each signal id named
         #   review     the new StructuralReview
         #   sig        each named signal, or None if the id is unknown
@@ -1736,9 +1761,18 @@ class Supervisor:
         for existing in self.reviews:
             if (not existing.resolved and existing.condition == condition
                     and existing.scope == scope):
-                for sid in signal_ids:
-                    if sid not in existing.signal_ids:
-                        existing.signal_ids.append(sid)
+                added = [sid for sid in signal_ids if sid not in existing.signal_ids]
+                existing.signal_ids.extend(added)
+                if added:
+                    self._log("REVIEW_JOINED", actor, review=existing.review_id,
+                              condition=condition, scope=scope, detail=detail,
+                              signals=added)
+                # A joining signal already under review escalates now, as it
+                # would have if it had been named when the review opened.
+                for sid in added:
+                    sig = self.signals.get(sid)
+                    if sig is not None and sig.state == S.UNDER_REVIEW:
+                        self._move(sig, S.ESCALATED, actor, review=existing.review_id)
                 return existing
         # --- Open a new review ---------------------------------------------
         review = StructuralReview(f"R{len(self.reviews) + 1}", condition, scope, detail,
@@ -2811,11 +2845,9 @@ class Supervisor:
             review"); the ratio applies to "uncertainty, dissent,
             classification, and framing signals", and "With no such
             closures, there is nothing to measure and the requirement is
-            met." The spec also says "Lock-in closures from earlier
-            overrides count among the closures"; the code would count them,
-            but it only ever creates lock-in closures on constraint and
+            met." Lock-in closures are only ever created on constraint and
             anomaly signals (see the override below), so none reach the
-            ratio in practice.
+            ratio; the draft's ratio definition no longer mentions them.
           Overrides (same section): "Gates can be overridden. Every override
             is permanently logged with the agent's identity, rationale, and
             timestamp. The system does not prevent decisions. It makes the

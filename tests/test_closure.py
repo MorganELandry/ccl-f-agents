@@ -1,6 +1,6 @@
 """
 HOW A LOOP IS SAID TO CLOSE
-A Play in Eighteen Scenes
+A Play in Nineteen Scenes
 =========================
 
 PROLOGUE
@@ -45,6 +45,7 @@ THE PLAYBILL
     Scene 16  test_role_switch_reopen_needs_independent_reviewer
     Scene 17  test_open_review_cannot_silently_reopen      (was a spec mismatch; now fixed)
     Scene 18  test_frame_adoption_is_authority_closure     (was a spec mismatch; now fixed)
+    Scene 19  test_broken_chain_is_shown_in_the_record
 
 READER'S NOTE — pytest.raises
     `with pytest.raises(SomeError):` passes only if the indented block
@@ -70,8 +71,9 @@ READER'S NOTE — a fixture, `sv`
 # pytest       fixtures, parametrize, raises.
 # cclf         ClosureType, CommitmentState, EvidenceKind, SignalType,
 #              Supervisor, TransitionRefused.
-# stagehands   shared set-up helpers (see tests/stagehands.py):
-#              to_review, add_ees, add_non_ees, entries, TECH, CUST, PROCESS.
+# stagehands   shared set-up helpers (see tests/stagehands.py): to_review,
+#              add_ees, add_non_ees, entries, TECH, CUST, PROCESS, and
+#              INDEPENDENT_LAB (the independent evidence producer).
 # ===========================================================================
 
 import pytest
@@ -79,7 +81,9 @@ import pytest
 from cclf import (
     ClosureType, CommitmentState, EvidenceKind, SignalType, Supervisor, TransitionRefused,
 )
-from stagehands import CUST, PROCESS, TECH, add_ees, add_non_ees, entries, to_review
+from stagehands import (
+    CUST, INDEPENDENT_LAB, PROCESS, TECH, add_ees, add_non_ees, entries, to_review,
+)
 
 
 # ===========================================================================
@@ -513,5 +517,40 @@ def test_frame_adoption_is_authority_closure(sv):
     to_review(sv, "frame", signal_type=SignalType.FRAMING, by="manager", referent=TECH)
     sv.adopt_frame("frame", "manager", [], "burden of proof inverted")
     assert sv.signals["frame"].state == S.CLOSED_AUTHORITY
+
+
+# ===========================================================================
+# SCENE 19 — THE CRACK IN THE RECORD
+# Proves: Layer 2, Closure Chain — an evidence closure that is not
+# chain-sound is "recorded as an evidence closure, with the broken link
+# shown in the record". Found by the October 2026 comment audit.
+# ===========================================================================
+
+def test_broken_chain_is_shown_in_the_record(sv):
+    """
+    Evidence depending on an authority-closed loop closes its signal as an
+    evidence closure, and the closure's audit entry names the broken link.
+
+    Enter:   sv   fixture
+    Exit:    passes if the closure is typed evidence, its TRANSITION entry
+             has chain_sound False and broken_links ["rig"], and a sound
+             closure records chain_sound True with no broken links
+    """
+    # PLAYERS IN THIS SCENE
+    #   closes   TRANSITION entries that closed a signal by evidence
+
+    to_review(sv, "rig")
+    sv.attempt_closure("rig", "manager", TECH, [], "rig is fine")      # authority
+    to_review(sv, "c")
+    sv.add_evidence("m", "measured", "lab", EvidenceKind.DIRECT_MEASUREMENT,
+                    INDEPENDENT_LAB, "clerk", ["c"], depends_on=["rig"])
+    sv.attempt_closure("c", "engineer", TECH, ["m"], "measured")
+    to_review(sv, "d")
+    add_ees(sv, "m2", ["d"])
+    sv.attempt_closure("d", "engineer", TECH, ["m2"], "measured")
+    closes = {e.payload["signal"]: e.payload for e in entries(sv, "TRANSITION")
+              if e.payload.get("closure_type") == "evidence"}
+    assert closes["c"]["chain_sound"] is False and closes["c"]["broken_links"] == ["rig"]
+    assert closes["d"]["chain_sound"] is True and closes["d"]["broken_links"] == []
 
 # EXEUNT — end of file.

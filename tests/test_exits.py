@@ -1,6 +1,6 @@
 """
 FOURTEEN WAYS TO LEAVE THE STAGE
-A Play in Twelve Scenes
+A Play in Thirteen Scenes
 ================================
 
 PROLOGUE
@@ -47,6 +47,7 @@ THE PLAYBILL
     Scene 10  test_statutory_trigger_does_not_resume       (was a spec mismatch; now fixed)
     Scene 11  test_successor_reentry_needs_a_successor     (was a spec mismatch; now fixed)
     Scene 12  test_refused_reentry_is_logged_and_changes_nothing
+    Scene 13  test_refused_exit_is_logged_and_changes_nothing
 
 READER'S NOTE — building keyword arguments with a dict
     `sv.exit(..., **extras)` unpacks a dict into keyword arguments, so
@@ -457,5 +458,32 @@ def test_refused_reentry_is_logged_and_changes_nothing(sv):
         sv.reenter("c", "manager", "on second thoughts")
     assert [e.actor for e in entries(sv, "REENTRY_REFUSED")] == ["manager"]
     assert sv.signals["c"].state == S.EXITED and sv.signals["c"].exit is not None
+
+
+# ===========================================================================
+# SCENE 13 — THE DOOR THAT WOULD NOT OPEN
+# Proves: a refused exit is logged (EXIT_REFUSED) like a refused
+# transition or re-entry, and changes nothing. "An unregistered exit is
+# structurally equivalent to a suppressed signal" (Layer 2, Exit
+# obligations). Found by the October 2026 comment audit.
+# ===========================================================================
+
+def test_refused_exit_is_logged_and_changes_nothing(sv):
+    """
+    A delegated exit without a successor is refused, logged, and leaves the
+    signal where it was.
+
+    Enter:   sv   fixture
+    Exit:    passes if TransitionRefused is raised, one EXIT_REFUSED entry
+             names the reason, and the signal is still under review
+    """
+    # PLAYERS IN THIS SCENE
+    #   [refusal]   the single EXIT_REFUSED entry
+
+    with pytest.raises(TransitionRefused):
+        sv.exit("c", X.DELEGATED, "steward", "handing it on")
+    [refusal] = entries(sv, "EXIT_REFUSED")
+    assert "successor" in refusal.payload["reason"]
+    assert sv.signals["c"].state == S.UNDER_REVIEW
 
 # EXEUNT — end of file.

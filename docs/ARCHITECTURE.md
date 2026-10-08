@@ -69,13 +69,13 @@ Blocked, each with a named reason:
 | **Authority** | Anything else that closes the signal: a decision without qualifying evidence. |
 | **Lock-in** | Recorded when an override of a failing irreversible gate latches constraint and anomaly signals under review into `trajectory_lock`. |
 
-**Closure Chain.** Evidence can name the loops it depends on (`add_evidence(..., depends_on=[...])`). An evidence closure is *chain-sound* only if at least one item of its qualifying evidence has every upstream loop itself closed by a chain-sound evidence closure. Soundness is computed when needed, so reopening an upstream loop weakens every closure downstream of it, and each one that loses its standing is logged as `CHAIN_WEAKENED`. A closure that isn't chain-sound stays recorded as an evidence closure but counts as non-evidence at the gates, in the ratio and in the coherence score.
+**Closure Chain.** Evidence can name the loops it depends on (`add_evidence(..., depends_on=[...])`). An evidence closure is *chain-sound* only if at least one item of its qualifying evidence has every upstream loop itself closed by a chain-sound evidence closure. Soundness is computed when needed, so reopening an upstream loop weakens every closure downstream of it, and each one that loses its standing is logged as `CHAIN_WEAKENED`. A closure that isn't chain-sound stays recorded as an evidence closure but counts as non-evidence at the gates, in the ratio and in the coherence score. Each evidence closure's audit entry records whether it was chain-sound when made (`chain_sound`) and which upstream loops were not (`broken_links`).
 
 If a signal has a registered closure authority and the closer is outside it, the closure is logged as an `ATTEMPTED_CLOSURE`, and the signal stays open. Adopting a frame (`adopt_frame`) by someone within the framing signal's closure authority is an authority closure, and the signals it displaces are suppressed. From anyone else it is only an attempted closure.
 
 ## Escalation (Layer 2)
 
-The ten escalation conditions each open a `StructuralReview`. Reviews are deduplicated per condition and scope. A review is resolved only with a documented Rule 8 model update, and an escalated signal returns to review only then.
+The ten escalation conditions each open a `StructuralReview`. Reviews are deduplicated per condition and scope: a repeat trigger adds its signals to the open review, logs `REVIEW_JOINED`, and escalates any added signal that is under review at once. A review is resolved only with a documented Rule 8 model update, and an escalated signal returns to review only then.
 
 | Condition | Trigger in this runtime |
 |---|---|
@@ -92,7 +92,7 @@ The ten escalation conditions each open a `StructuralReview`. Reviews are dedupl
 
 ## Exits (Layer 2, Loop Exit Taxonomy)
 
-All 14 exit types are supported. Their obligations are enforced:
+All 14 exit types are supported. Their obligations are enforced, and a refused exit is logged as `EXIT_REFUSED`:
 
 - terminal, legal and key-person exits note the open loop state;
 - a delegated exit names a successor;

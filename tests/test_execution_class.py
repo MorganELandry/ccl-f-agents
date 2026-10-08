@@ -1087,11 +1087,11 @@ def test_unresolved_downgrade_review_blocks_execution_at_any_class():
 
     The action: request at ROUTINE; then raise back to IRREVERSIBLE (its
     loop and EES requirements are met in sound_world) and request again.
-    The verdict: both blocked by the review, and at IRREVERSIBLE by nothing
-    else among the loop/EES requirements. Note that the runtime checks an
-    unresolved downgrade review before every gate except Rule 4 and returns
-    at once, so the missing loop/EES failures show that early return as
-    much as they show sound_world meeting those requirements.
+    The verdict: both blocked, and in each case the review is the only
+    reason given. (The runtime checks an unresolved downgrade review right
+    after Rule 4 and returns at once, so this asserts that early return;
+    it does not by itself show sound_world meeting the irreversible gate.
+    Scene 35 shows the decision executing once the review is resolved.)
     """
     # PLAYERS IN THIS SCENE
     #   sv        the Supervisor
@@ -1106,8 +1106,7 @@ def test_unresolved_downgrade_review_blocks_execution_at_any_class():
     high = sv.request_execution("d1", DIRECTOR)
     assert not high.permitted
     assert failures_with(high, REVIEW_MSG)
-    assert failures_with(high, CONSTRAINT_MSG) == []
-    assert failures_with(high, EES_MSG) == []
+    assert len(low.failures) == 1 and len(high.failures) == 1
 
 
 # ===========================================================================

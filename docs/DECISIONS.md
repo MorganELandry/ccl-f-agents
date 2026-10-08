@@ -40,7 +40,7 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
 
 ### Escalation
 
-- **One open review per condition and scope.** A repeat trigger adds signals to the existing review instead of opening a new one.
+- **One open review per condition and scope.** A repeat trigger adds signals to the existing review instead of opening a new one, logs `REVIEW_JOINED`, and escalates at once any added signal that is under review (found by the October 2026 comment audit; previously such a signal waited until it next entered review).
 - **A resolved recurrence group stays reviewed.** Later members do not reopen it.
 - **Recovery only through Rule 8.** An escalated signal returns to review only when its review is resolved with a documented model update.
 
@@ -79,7 +79,7 @@ The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can 
   - "Blocked" means any execution request that wasn't permitted, including a Rule 4 refusal.
   - A lowering without reversal support is accepted, not refused; like a registration at that class, it is simply gated as irreversible.
   - The authority-closure-count escalation uses the applied class, so it also fires for a decision declared lower without support.
-  - The TLA+ model does not cover execution classes.
+  - The TLA+ model covers execution classes in its own configuration (`verification/tla/Classes.cfg`), with the reversal evidence's independence abstracted to a yes/no.
 - **Duplicate IDs are refused** for signals, evidence and decisions, so an accepted record cannot be silently replaced.
 
 ### Model use

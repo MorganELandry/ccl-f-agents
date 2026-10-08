@@ -1,6 +1,6 @@
 """
 THE TEN ALARMS
-A Play in Eighteen Scenes
+A Play in Nineteen Scenes
 =========================
 
 PROLOGUE
@@ -49,6 +49,7 @@ THE PLAYBILL
     Scene 17  test_recovery_only_through_model_update        (was a spec mismatch, now fixed;
                                                               parametrized, 2 runs)
     Scene 18  test_earned_discounts_do_not_count_toward_ap_g
+    Scene 19  test_signal_joining_an_open_review_escalates_at_once
 
 READER'S NOTE — Settings
     Supervisor(Settings(...)) changes a threshold for one supervisor only.
@@ -589,5 +590,36 @@ def test_earned_discounts_do_not_count_toward_ap_g(sv):
     sv.record_credibility_discount("pat", "manager", "emotional")
     assert E.SENDER_DISCOUNT_RECURRENCE in conditions(sv)
     assert "pat" in sv.sender_discount_void
+
+
+# ===========================================================================
+# SCENE 19 — LATE TO THE ALARM
+# Proves: a signal under review that joins an already-open structural
+# review (same condition and scope) is escalated at once, as it would have
+# been had it been named when the review opened. Found by the October 2026
+# comment audit.
+# ===========================================================================
+
+def test_signal_joining_an_open_review_escalates_at_once(sv):
+    """
+    Two unsupported discounts against one agent name two different signals
+    under review; the second joins the first's review and escalates.
+
+    Enter:   sv   fixture
+    Exit:    passes if one review holds both signals, both are escalated,
+             and the join is logged as REVIEW_JOINED
+    """
+    # PLAYERS IN THIS SCENE
+    #   reviews   the credibility-discounting reviews on the agent
+
+    to_review(sv, "a", by="kim")
+    to_review(sv, "b", by="kim")
+    sv.record_credibility_discount("kim", "manager", "difficult", signal_id="a")
+    sv.record_credibility_discount("kim", "manager", "too direct", signal_id="b")
+    reviews = [r for r in sv.reviews if r.condition == E.CREDIBILITY_DISCOUNTING]
+    assert len(reviews) == 1 and reviews[0].signal_ids == ["a", "b"]
+    assert sv.signals["a"].state == S.ESCALATED and sv.signals["b"].state == S.ESCALATED
+    assert [e.payload["signals"] for e in sv.audit.entries()
+            if e.event == "REVIEW_JOINED"] == [["b"]]
 
 # EXEUNT — end of file.

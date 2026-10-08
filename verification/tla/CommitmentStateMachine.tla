@@ -11,7 +11,14 @@
 (*                                                                         *)
 (* What it covers: the transition table, the exits and their re-entry      *)
 (* rules, the Rule 8 recovery condition, the append-only audit log,        *)
-(* Rule 4 acceptance and the irreversible gate with its logged override.   *)
+(* Rule 4 acceptance, the gates with their logged override, and Execution  *)
+(* Class Assignment (irreversible by default, tested reversal path,        *)
+(* logged reclassification, the relabel-after-refusal review).            *)
+(*                                                                         *)
+(* Two configurations check it (see README): CommitmentStateMachine.cfg    *)
+(* explores the signal lifecycle with two signals and a fixed irreversible *)
+(* decision; Classes.cfg explores every class, reversal and relabel path   *)
+(* with one signal. Every property is checked in both.                     *)
 (* What it does NOT cover: closure typing, coherence scoring and the       *)
 (* thresholds (see ../alloy and docs/DECISIONS.md). It checks the 0.2      *)
 (* automaton as written; it is not the 0.3 formal semantics.               *)
@@ -36,8 +43,11 @@
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
-CONSTANTS Signals,   \* the signals in the model, e.g. {s1, s2}
-          MaxLog     \* bound on audit-log length, to keep the search finite
+CONSTANTS Signals,        \* the signals in the model, e.g. {s1, s2}
+          MaxLog,         \* bound on audit-log length, to keep the search finite
+          DeclaredInit,   \* execution classes the decision may be registered with
+          ReversalInit,   \* whether a tested reversal path may exist at registration
+          Reclassify      \* TRUE: explore relabels, refusals and the relabel review
 
 (***************************************************************************)
 (* SCENE 1 - THE VOCABULARY                                                *)
@@ -93,12 +103,32 @@ Transitions ==
 (*   cond[s]         a resolution condition was registered at its exit     *)
 (*   modelUpdate[s]  a Rule 8 model update has been documented for it      *)
 (*   accepted        Rule 4 acceptance given for the decision              *)
+(*   declared        the decision's declared execution class               *)
+(*   reversal        a reversal path is registered AND backed by an EES    *)
+(*                   showing it was tested (who produced the evidence is   *)
+(*                   abstracted away; the Python tests cover that)         *)
+(*   everBlocked     some execution request on the decision was refused    *)
+(*   relabel         the relabel-after-refusal review: "none", "open" or   *)
+(*                   "resolved"                                            *)
 (*   executed        the irreversible decision has executed                *)
 (*   log             the audit log: a sequence of records                  *)
 (***************************************************************************)
-VARIABLES state, exitType, legal, cond, modelUpdate, accepted, executed, log
+VARIABLES state, exitType, legal, cond, modelUpdate, accepted, executed, log,
+          declared, reversal, everBlocked, relabel
 
-vars == <<state, exitType, legal, cond, modelUpdate, accepted, executed, log>>
+vars == <<state, exitType, legal, cond, modelUpdate, accepted, executed, log,
+          declared, reversal, everBlocked, relabel>>
+
+\* The decision-class variables, for UNCHANGED clauses.
+classVars == <<declared, reversal, everBlocked, relabel>>
+
+Classes == {"routine", "elevated", "irreversible"}
+Rank == [c \in Classes |-> IF c = "routine" THEN 0 ELSE IF c = "elevated" THEN 1 ELSE 2]
+
+\* Execution Class Assignment: the declared class applies only if it is
+\* irreversible or a tested reversal path supports it.
+Applied(d, r) == IF d = "irreversible" \/ r THEN d ELSE "irreversible"
+AppliedNow == Applied(declared, reversal)
 
 Init == /\ state       = [s \in Signals |-> "unregistered"]
         /\ exitType    = [s \in Signals |-> "none"]
@@ -108,6 +138,10 @@ Init == /\ state       = [s \in Signals |-> "unregistered"]
         /\ accepted    = FALSE
         /\ executed    = FALSE
         /\ log         = <<>>
+        /\ declared    \in DeclaredInit
+        /\ reversal    \in ReversalInit
+        /\ everBlocked = FALSE
+        /\ relabel     = "none"
 
 \* Every log record has the same fields; unused ones hold "none".
 Rec(kind, sig, from, to) ==
@@ -127,7 +161,7 @@ Move(s, t) ==
   /\ state[s] /= "escalated"           \* recovery: see Recover
   /\ state' = [state EXCEPT ![s] = t]
   /\ Log(Rec("transition", s, state[s], t))
-  /\ UNCHANGED <<exitType, legal, cond, modelUpdate, accepted, executed>>
+  /\ UNCHANGED <<exitType, legal, cond, modelUpdate, accepted, executed>> /\ UNCHANGED classVars
 
 \* "A closed loop cannot be silently reopened": the reopen is its own
 \* logged record (rationale, reopening agent, superseded closure).
@@ -136,7 +170,7 @@ Reopen(s) ==
   /\ <<state[s], "under_review">> \in Transitions
   /\ state' = [state EXCEPT ![s] = "under_review"]
   /\ Log(Rec("reopen", s, state[s], "under_review"))
-  /\ UNCHANGED <<exitType, legal, cond, modelUpdate, accepted, executed>>
+  /\ UNCHANGED <<exitType, legal, cond, modelUpdate, accepted, executed>> /\ UNCHANGED classVars
 
 \* Rule 8: structural review documents a model update.
 DocumentModelUpdate(s) ==
@@ -144,7 +178,7 @@ DocumentModelUpdate(s) ==
   /\ ~modelUpdate[s]
   /\ modelUpdate' = [modelUpdate EXCEPT ![s] = TRUE]
   /\ Log(Rec("model_update", s, "escalated", "escalated"))
-  /\ UNCHANGED <<state, exitType, legal, cond, accepted, executed>>
+  /\ UNCHANGED <<state, exitType, legal, cond, accepted, executed>> /\ UNCHANGED classVars
 
 \* escalated -> under_review, only once the model update is on record.
 Recover(s) ==
@@ -154,7 +188,7 @@ Recover(s) ==
   /\ state' = [state EXCEPT ![s] = "under_review"]
   /\ modelUpdate' = [modelUpdate EXCEPT ![s] = FALSE]
   /\ Log(Rec("transition", s, "escalated", "under_review"))
-  /\ UNCHANGED <<exitType, legal, cond, accepted, executed>>
+  /\ UNCHANGED <<exitType, legal, cond, accepted, executed>> /\ UNCHANGED classVars
 
 \* any open state -> exited(type). A legal exit records its sub-type; a
 \* containment, deferred or ambiguity exit may register a resolution
@@ -168,7 +202,7 @@ Exit(s, x, sub, c) ==
   /\ legal'    = [legal    EXCEPT ![s] = sub]
   /\ cond'     = [cond     EXCEPT ![s] = c]
   /\ Log(Rec("exit", s, state[s], x))
-  /\ UNCHANGED <<modelUpdate, accepted, executed>>
+  /\ UNCHANGED <<modelUpdate, accepted, executed>> /\ UNCHANGED classVars
 
 \* May an exit of type x (legal sub-type sub) re-enter, given whether a
 \* successor is registered, the resumer differs, a legal hold is lifted,
@@ -194,14 +228,14 @@ Reenter(s) ==
     /\ legal'    = [legal    EXCEPT ![s] = "none"]
     /\ cond'     = [cond     EXCEPT ![s] = FALSE]
     /\ Log(Rec("reentry", s, "exited", "under_review"))
-    /\ UNCHANGED <<modelUpdate, accepted, executed>>
+    /\ UNCHANGED <<modelUpdate, accepted, executed>> /\ UNCHANGED classVars
 
 \* Rule 4: someone explicitly accepts authorization, risk and rationale.
 Accept ==
   /\ ~accepted
   /\ accepted' = TRUE
   /\ Log(Rec("acceptance", "none", "none", "none"))
-  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, executed>>
+  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, executed>> /\ UNCHANGED classVars
 
 \* Exits whose "Loop State After" leaves the loop open.
 LeavesOpen == {"containment", "recoverable", "delegated", "deferred", "forced",
@@ -221,25 +255,78 @@ GateOK == \A s \in Signals :
             \/ state[s] = "closed_evidence"
             \/ state[s] = "exited" /\ exitType[s] \in ResolvingExits
 
-\* Clean execution: accepted and the gate passes.
+\* The elevated and routine gates, reduced the same way: routine needs
+\* every signal registered; elevated also needs each one at least
+\* classified (classification acknowledged, open loops documented).
+GateElevated == \A s \in Signals : state[s] \notin {"unregistered", "registered"}
+GateRoutine  == \A s \in Signals : state[s] /= "unregistered"
+GateFor(c) == CASE c = "irreversible" -> GateOK
+                [] c = "elevated"     -> GateElevated
+                [] c = "routine"      -> GateRoutine
+
+\* An unresolved relabel review blocks execution at every class, override
+\* included.
+RelabelOpen == relabel = "open"
+
+\* Clean execution: accepted, no relabel review open, and the gate for the
+\* APPLIED class passes.
 Execute ==
-  /\ accepted /\ ~executed /\ GateOK
+  /\ accepted /\ ~executed /\ ~RelabelOpen /\ GateFor(AppliedNow)
   /\ executed' = TRUE
   /\ Log(Rec("execution_permitted", "none", "none", "none"))
-  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, accepted>>
+  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, accepted>> /\ UNCHANGED classVars
 
-\* Override: accepted, the gate fails, the override is logged, and every
-\* signal under review is latched into trajectory_lock (lock-in closure).
-\* Two records are appended: the override, then the open-loop marker.
+\* Override: accepted, no relabel review open, the applied gate fails, and
+\* the override is logged. At the irreversible class every signal under
+\* review is latched into trajectory_lock (lock-in closure) and the
+\* open-loop marker is logged too; a lower class latches nothing.
 Override ==
-  /\ accepted /\ ~executed /\ ~GateOK
+  /\ accepted /\ ~executed /\ ~RelabelOpen /\ ~GateFor(AppliedNow)
   /\ Len(log) + 2 <= MaxLog
   /\ executed' = TRUE
-  /\ state' = [s \in Signals |->
-                 IF state[s] = "under_review" THEN "trajectory_lock" ELSE state[s]]
-  /\ log' = log \o << Rec("gate_override", "none", "none", "none"),
-                      Rec("open_loop_irreversible_execution", "none", "none", "none") >>
-  /\ UNCHANGED <<exitType, legal, cond, modelUpdate, accepted>>
+  /\ IF AppliedNow = "irreversible"
+       THEN /\ state' = [s \in Signals |->
+                         IF state[s] = "under_review" THEN "trajectory_lock" ELSE state[s]]
+            /\ log' = log \o << Rec("gate_override", "none", "none", "none"),
+                               Rec("open_loop_irreversible_execution", "none", "none", "none") >>
+       ELSE /\ state' = state
+            /\ log' = Append(log, Rec("gate_override", "none", "none", "none"))
+  /\ UNCHANGED <<exitType, legal, cond, modelUpdate, accepted>> /\ UNCHANGED classVars
+
+\* A refused execution request: no acceptance, a relabel review open, or the
+\* applied gate fails (and no override is given). Recorded, because a later
+\* lowering is judged against it.
+Refuse ==
+  /\ Reclassify
+  /\ ~executed
+  /\ ~accepted \/ RelabelOpen \/ ~GateFor(AppliedNow)
+  /\ everBlocked' = TRUE
+  /\ Log(Rec("execution_blocked", "none", "none", "none"))
+  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, accepted, executed,
+                 declared, reversal, relabel>>
+
+\* Reclassify: change the declared class and/or the reversal support (new
+\* evidence, or evidence replaced). Logged. A lowering of the declared or
+\* the applied class after a refusal opens the relabel review.
+ReclassifyTo(c, r) ==
+  /\ Reclassify
+  /\ ~executed
+  /\ <<c, r>> /= <<declared, reversal>>
+  /\ declared' = c
+  /\ reversal' = r
+  /\ LET lowered == \/ Rank[c] < Rank[declared]
+                    \/ Rank[Applied(c, r)] < Rank[AppliedNow]
+     IN relabel' = IF lowered /\ everBlocked THEN "open" ELSE relabel
+  /\ Log(Rec("decision_reclassified", "none", declared, c))
+  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, accepted, executed, everBlocked>>
+
+\* Rule 8: the relabel review is resolved by a documented model update.
+ResolveRelabel ==
+  /\ RelabelOpen
+  /\ relabel' = "resolved"
+  /\ Log(Rec("model_update", "none", "relabel", "relabel"))
+  /\ UNCHANGED <<state, exitType, legal, cond, modelUpdate, accepted, executed,
+                 declared, reversal, everBlocked>>
 
 Next ==
   /\ Len(log) < MaxLog
@@ -247,7 +334,8 @@ Next ==
      \/ \E s \in Signals : Reopen(s) \/ DocumentModelUpdate(s) \/ Recover(s) \/ Reenter(s)
      \/ \E s \in Signals, x \in ExitTypes, sub \in LegalSubtypes \cup {"none"}, c \in BOOLEAN :
           Exit(s, x, sub, c)
-     \/ Accept \/ Execute \/ Override
+     \/ Accept \/ Execute \/ Override \/ Refuse \/ ResolveRelabel
+     \/ \E c \in Classes, r \in BOOLEAN : ReclassifyTo(c, r)
 
 (***************************************************************************)
 (* SCENE 4 - THE PROPERTIES                                                *)
@@ -262,6 +350,8 @@ TypeOK ==
   /\ cond \in [Signals -> BOOLEAN]
   /\ modelUpdate \in [Signals -> BOOLEAN]
   /\ accepted \in BOOLEAN /\ executed \in BOOLEAN
+  /\ declared \in Classes /\ reversal \in BOOLEAN /\ everBlocked \in BOOLEAN
+  /\ relabel \in {"none", "open", "resolved"}
 
 \* Blocked 1: a signal cannot be closed before it is classified.
 NoCloseBeforeClassified ==
@@ -325,23 +415,50 @@ EveryChangeLogged ==
 \* Rule 4 is never overridden: execution implies acceptance.
 Rule4 == executed => accepted
 
-\* Execution with open loops is never silent: an override is on record.
+\* Execution past a failing gate is never silent: an override is on record.
 OpenLoopExecutionLogged ==
-  [][(~executed /\ executed' /\ ~GateOK)
+  [][(~executed /\ executed' /\ ~GateFor(AppliedNow))
        => \E i \in 1..Len(log') : log'[i].kind = "gate_override"]_vars
 
 \* After an override, nothing is left under review: each such loop was
 \* latched into trajectory_lock as a permanent marker.
 OverrideLatchesReviews ==
-  [][(~executed /\ executed' /\ ~GateOK)
+  [][(~executed /\ executed' /\ AppliedNow = "irreversible" /\ ~GateOK)
        => \A s \in Signals : state'[s] /= "under_review"]_vars
 
-\* A constraint closed by authority or role switch never lets the gate
-\* pass cleanly: clean execution needs every loop evidence-closed or
-\* resolved by exit.
+\* A constraint closed by authority or role switch never lets the
+\* irreversible gate pass cleanly: clean execution at that class needs
+\* every loop evidence-closed or resolved by exit.
 NoCleanPassOverAuthorityClosure ==
-  [][(~executed /\ executed' /\ log'[Len(log')].kind = "execution_permitted")
+  [][(~executed /\ executed' /\ log'[Len(log')].kind = "execution_permitted"
+      /\ AppliedNow = "irreversible")
        => \A s \in Signals : state[s] \notin {"closed_authority", "closed_role_switch"}]_vars
+
+\* Execution Class Assignment. A class below irreversible applies only with
+\* a tested reversal path ("Every execution-class decision is irreversible
+\* unless shown otherwise").
+LowerClassNeedsReversal == AppliedNow /= "irreversible" => reversal
+
+\* A clean execution below irreversible happens only with a tested
+\* reversal path behind it.
+NoLowerClassExecutionWithoutReversal ==
+  [][(~executed /\ executed' /\ AppliedNow /= "irreversible") => reversal]_vars
+
+\* Lowering the declared or applied class after a refusal opens the
+\* relabel review.
+RelabelAfterRefusalEscalates ==
+  [][(everBlocked /\ \/ Rank[declared'] < Rank[declared]
+                     \/ Rank[Applied(declared', reversal')] < Rank[AppliedNow])
+       => relabel' = "open"]_vars
+
+\* Nothing executes, by override or otherwise, while that review is open.
+NoExecutionWhileRelabelOpen ==
+  [][(~executed /\ executed') => relabel /= "open"]_vars
+
+\* Reclassification is never silent.
+ReclassificationLogged ==
+  [][(<<declared, reversal>> /= <<declared', reversal'>>)
+       => log'[Len(log')].kind = "decision_reclassified"]_vars
 
 (***************************************************************************)
 (* SCENE 5 - THE SPECIFICATION                                             *)

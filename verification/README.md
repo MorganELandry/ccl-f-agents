@@ -7,14 +7,14 @@ These are machine-checked models of the parts of the CCL-F v0.2 runtime where a 
 A Python test (`tests/test_verification.py`) ties both models to the code, so they cannot drift apart unnoticed.
 
 ```bash
-bash verification/run.sh      # downloads pinned, checksummed jars; about 17 minutes
+bash verification/run.sh      # downloads pinned, checksummed jars; about 30 minutes
 ```
 
 It needs Java 17 or later. Without Java, the model-to-code tests still run in the normal `pytest`; only the checker runs are skipped.
 
 ## Scope
 
-These models check the **0.2 automaton as written**: its transition table, exits, recovery conditions, audit log and gate. They are a first piece of the v0.2 draft's 0.3 discrete track ("formal transition semantics, invariants, TLA+/Alloy verification"), not the whole of it. They do not cover:
+These models check the **0.2 automaton as written**: its transition table, exits, recovery conditions, audit log, gates and execution class assignment. They are a first piece of the v0.2 draft's 0.3 discrete track ("formal transition semantics, invariants, TLA+/Alloy verification"), not the whole of it. They do not cover:
 
 - transition-function semantics;
 - coherence scoring;
@@ -25,18 +25,24 @@ A passing check means no counterexample exists **within the bounds** below. It i
 
 ## TLA+: `tla/CommitmentStateMachine.tla`
 
-**Model.** Two signals, one irreversible decision, an audit log of at most 8 records. The model has:
+**Model.** One model, checked in two configurations (below). It has:
 
 - all 14 table transitions;
 - all 14 exit types, with the four legal sub-types;
 - re-entry conditions: successor, a different agent, a hold lifted, a resolution condition registered at exit and met;
 - the Rule 8 model update;
 - Rule 4 acceptance;
-- the irreversible gate (a constraint counts as resolved only if evidence-closed or exited terminal/superseded) and its logged override.
+- the three gates: routine (signals registered), elevated (each signal at least classified) and irreversible (a constraint counts as resolved only if evidence-closed or exited terminal/superseded), with the logged override;
+- Execution Class Assignment: the decision may be registered at any class, with or without a tested reversal path; the gate applies the declared class only with that path, otherwise irreversible; reclassification, refused requests, the relabel-after-refusal review, and its resolution.
 
-The model does not cover Closure Chain, the decision-level External Evidence Source requirement, or Execution Class Assignment; those are tested in Python (`tests/test_gate_design.py`, `tests/test_execution_class.py`).
+Who produced the reversal evidence is abstracted to a single yes/no ("a tested reversal path exists"). The independence test on that evidence, Closure Chain and the decision-level External Evidence Source requirement are tested in Python (`tests/test_execution_class.py`, `tests/test_gate_design.py`).
 
-**Result.** TLC explores every reachable state: 31,485,931 distinct states, depth 9. It finds no violation.
+| Configuration | What varies | Bound | Result |
+|---|---|---|---|
+| `CommitmentStateMachine.cfg` (lifecycle) | the full signal lifecycle, two signals; decision fixed as irreversible, no relabels | log of 8 records | 31,485,931 distinct states, depth 9; no violation |
+| `Classes.cfg` (execution classes) | every class, reversal, refusal, relabel and review path; one signal | log of 7 records | 25,658,023 distinct states, depth 8; no violation |
+
+Every property below is checked in both configurations.
 
 | Property | What it says | Source in the draft |
 |---|---|---|
@@ -55,11 +61,20 @@ The model does not cover Closure Chain, the decision-level External Evidence Sou
 | `Rule4` | execution implies acceptance | Rule 4 |
 | `OpenLoopExecutionLogged` | executing with open loops leaves an override on record | Execution Gates |
 | `OverrideLatchesReviews` | after an override, no loop is left under review; each is latched in trajectory_lock | Layer 4, lock-in closure |
-| `NoCleanPassOverAuthorityClosure` | the gate never passes cleanly over a constraint closed by authority or role switch | Reversibility Logic; Execution Gates |
+| `NoCleanPassOverAuthorityClosure` | the irreversible gate never passes cleanly over a constraint closed by authority or role switch | Reversibility Logic; Execution Gates |
+| `LowerClassNeedsReversal` | the gate applies a class below irreversible only with a tested reversal path | Execution Class Assignment |
+| `NoLowerClassExecutionWithoutReversal` | nothing executes below irreversible without a tested reversal path | Execution Class Assignment |
+| `RelabelAfterRefusalEscalates` | lowering the declared or applied class after a refusal opens the relabel review | Execution Class Assignment; Escalation Conditions |
+| `NoExecutionWhileRelabelOpen` | nothing executes, by override or otherwise, while that review is open | Execution Class Assignment |
+| `ReclassificationLogged` | every change of class or reversal support is logged | Execution Class Assignment |
 
-**Not vacuous.** `tests/test_verification.py` plants two faults in copies of the model and confirms TLC catches each:
+**Not vacuous.** `tests/test_verification.py` plants six faults in copies of the model and confirms TLC catches each:
 - `classified → closed_authority` added to the table: `NoCloseBeforeReview` is violated;
-- the pre-October-2026 gate restored, which let an authority-closed constraint pass: `NoCleanPassOverAuthorityClosure` is violated.
+- the pre-October-2026 gate restored, which let an authority-closed constraint pass: `NoCleanPassOverAuthorityClosure` is violated;
+- the declared class trusted as given: `LowerClassNeedsReversal` is violated;
+- the relabel review never opened: `RelabelAfterRefusalEscalates` is violated;
+- an override allowed past the open review: `NoExecutionWhileRelabelOpen` is violated;
+- only declared-class lowerings counted, so adding evidence after a refusal slips through: `RelabelAfterRefusalEscalates` is violated.
 
 ## Alloy: `alloy/closure_and_architecture.als`
 

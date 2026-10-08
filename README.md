@@ -42,13 +42,13 @@ Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 The state machine and the closure and Layer 0 rules are also written as formal models and machine-checked ([verification/](verification/README.md)):
 
-- **TLA+:** TLC explores all 31.5 million reachable states of a bounded model of the Layer 4 state machine. It confirms the draft's four blocked transitions, the recovery and re-entry rules, the append-only audit log, Rule 4, and the logged override.
+- **TLA+:** TLC explores every reachable state of a bounded model of the Layer 4 state machine, in two configurations (31.5 million states for the signal lifecycle, 25.7 million for execution classes). It confirms the draft's four blocked transitions, the recovery and re-entry rules, the append-only audit log, Rule 4, the logged override, and that a decision can't be relabeled past the irreversible gate.
 - **Alloy:** the Alloy Analyzer checks closure typing and the Layer 0 voids. It found one gap in the runtime, a successor who is also the steward passing AP.1b, which is now fixed.
 
 A test ties both models to the Python code so they cannot drift apart.
 
 ```bash
-bash verification/run.sh                 # needs Java 17+; about 17 minutes
+bash verification/run.sh                 # needs Java 17+; about 30 minutes
 ```
 
 ## Scenarios
@@ -66,7 +66,7 @@ pip install -r requirements.txt
 python run_demo.py challenger            # also: therac25, mcas
 python run_demo.py mcas --quiet          # summary only
 python run_demo.py therac25 --audit therac25_audit.json --no-obs
-pytest                                   # 321 tests, no API key needed (4 of them need Java)
+pytest                                   # 328 tests, no API key needed (8 of them need Java)
 ```
 
 The scenarios make no model calls, so the demo needs no API key.
