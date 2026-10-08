@@ -10,11 +10,14 @@ Layer 4 (Layer 4, Execution Gates), together with what the gates draw on:
 
   Execution Gates table (Layer 4, Execution Gates):
     Irreversible  Constraint and anomaly loops evidence-closed; minimum
-                  evidence closure ratio met for the other loops; at least
-                  one External Evidence Source; classification stabilized;
-                  recurrence groups reviewed
+                  evidence closure ratio met for the other loops, none left
+                  open; at least one External Evidence Source for the
+                  principal risk claim; classification stabilized;
+                  recurrence groups reviewed; coherence at or above
+                  threshold
     Elevated      Classification acknowledged; open loops documented
-    Routine       Signal registration complete
+    Routine       Signal registration complete; Architecture Precondition
+                  met
   Coherence threshold (Layer 4, Coherence Score): "A score below the
     domain-configured threshold blocks irreversible execution pending
     acknowledgment."
@@ -25,10 +28,11 @@ Layer 4 (Layer 4, Execution Gates), together with what the gates draw on:
     execution-class decision, a single agent must explicitly accept
     authorization, risk acceptance, and rationale documentation as their
     responsibility."
-  Lock-in (Layer 4, Commitment State Machine; Key Definitions, Lock-in
-    Closure; Key Definitions, Open-Loop Irreversible Execution): overriding
-    with open constraint loops is "open-loop irreversible execution",
-    recorded as under_review -> trajectory_lock with a lock-in closure record.
+  The POST-EXECUTION LATCH (Layer 4, Commitment State Machine; Key
+    Definitions, Open-Loop Irreversible Execution): overriding an
+    irreversible gate is "open-loop irreversible execution"; "The loops
+    carried open are latched into `executed_open`", with the overrider as
+    their steward. No lock-in closure is recorded.
   Layer 0 (Layer 0, The Architecture Precondition): with the Architecture
     Precondition unmet, gates are "structurally void". The runtime reports
     the voids it can check.
@@ -50,7 +54,8 @@ THE PLAYBILL
     Scene 9   test_clean_irreversible_decision_is_permitted
     Scene 10  test_rule4_acceptance_required_and_not_overridable
     Scene 11  test_override_logged_with_identity_rationale_and_time
-    Scene 12  test_override_latches_open_constraints_into_trajectory_lock
+    Scene 12  test_override_latches_unresolved_loops_into_executed_open
+    Scene 12b test_override_latches_exited_role_switch_and_unsound_constraints
     Scene 13  test_layer0_voids_are_reported                    (impl. decision D9)
     Scene 14  test_exited_constraint_still_counts_as_open      (was a spec mismatch; now fixed)
     Scene 15  test_off_envelope_or_containment_needs_more     (was a spec mismatch, now fixed;
@@ -85,7 +90,8 @@ overriding is its own granted power.
 # cclf         Architecture, ClosureType, CommitmentState, EscalationCondition,
 #              ExecutionClass, ExitType, OperationalState, Power, Settings,
 #              SignalType, Supervisor, TransitionRefused.
-# stagehands   CUST, TECH, PROCESS, to_review, add_ees, decision, entries.
+# stagehands   CUST, TECH, PROCESS, RULE3, UPDATE, UPDATE_AT_LEVEL, to_review,
+#              add_ees, decision, entries.
 # ===========================================================================
 
 import pytest
@@ -94,7 +100,10 @@ from cclf import (
     Architecture, ClosureType, CommitmentState, EscalationCondition, ExecutionClass, ExitType,
     OperationalState, Power, Settings, SignalType, Supervisor, TransitionRefused,
 )
-from stagehands import CUST, PROCESS, TECH, add_ees, decision, entries, to_review
+from stagehands import (
+    CUST, PROCESS, RULE3, TECH, UPDATE, UPDATE_AT_LEVEL, add_ees, attest, decision, entries,
+    to_review,
+)
 
 
 # ===========================================================================
@@ -238,21 +247,29 @@ def test_irreversible_blocks_unresolved_constraint_loops(sv):
 
 def test_irreversible_blocks_unstable_classification(sv):
     """
-    Implementation-decision test for the stability rule (D8: stable means
-    classified and not reclassified to a different state since review last
-    opened). A signal
-    reclassified after review opened blocks the gate even when closed by
-    evidence.
+    Spec (Layer 4, Execution Gates, "Classification stabilized"): "no
+    signal has been reclassified toward a less cautious state since its
+    first review opened ... A reclassification toward greater caution does
+    not destabilize". A signal raised to experimental during review stays
+    stable; one lowered from experimental to elevated uncertainty blocks
+    the gate even when closed by evidence.
 
     Enter:   sv   fixture
-    Exit:    passes if the failure "classification not stabilized" names "c"
+    Exit:    passes if the failure "classification not stabilized" names
+             "low" and not "up"
     """
-    to_review(sv, "c")
-    sv.classify("c", O.EXPERIMENTAL, "eng")
-    evidence_close(sv, "c")
-    decision(sv, "d", ["c"])
-    assert "classification not stabilized: ['c']" in \
-        sv.request_execution("d", "director").failures
+    # PLAYERS IN THIS SCENE
+    #   failures   the gate's failure texts
+
+    to_review(sv, "up")
+    sv.classify("up", O.EXPERIMENTAL, "eng")                     # toward caution
+    evidence_close(sv, "up")
+    to_review(sv, "low", state=O.EXPERIMENTAL)
+    sv.classify("low", O.ELEVATED_UNCERTAINTY, "eng")            # less caution
+    evidence_close(sv, "low")
+    decision(sv, "d", ["up", "low"])
+    failures = sv.request_execution("d", "director").failures
+    assert "classification not stabilized: ['low']" in failures
 
 
 # ===========================================================================
@@ -278,7 +295,7 @@ def test_irreversible_blocks_unreviewed_recurrence_group(sv):
     decision(sv, "d", ["m1", "m2", "m3"])
     assert "recurrence groups not reviewed: ['g']" in \
         sv.request_execution("d", "director").failures
-    sv.resolve_review("R1", "board", "change the joint design")
+    sv.resolve_review("R1", "board", **UPDATE_AT_LEVEL)
     for n in (1, 2, 3):
         sv.classify(f"m{n}", O.ELEVATED_UNCERTAINTY, "eng")
         sv.open_review(f"m{n}", "eng")
@@ -326,8 +343,10 @@ def test_coherence_threshold_blocks_irreversible():
     """
     Implementation-decision test (D3: default threshold 0.6). A decision
     whose only failure is coherence is blocked at threshold 0.95 and the
-    same history is permitted at 0.6. Independent lab evidence cited in the
-    acceptance supplies the External Evidence Source the gate requires.
+    same history is permitted at 0.6. The uncertainty loop is closed by
+    evidence, reopened and closed by evidence again: every gate
+    requirement is met, but the reopen lowers closure quality (2 evidence
+    closures over 2 closures + 1 reopen), so the score is about 0.93.
 
     Enter:   (nothing)
     Exit:    passes if the strict supervisor reports only the coherence
@@ -341,10 +360,16 @@ def test_coherence_threshold_blocks_irreversible():
     strict, lax = Supervisor(Settings(coherence_threshold=0.95)), Supervisor()
     assert lax.settings.coherence_threshold == 0.6
     for sv in (strict, lax):
-        to_review(sv, "u", signal_type=SignalType.UNCERTAINTY)   # open, not a constraint
+        to_review(sv, "u", signal_type=SignalType.UNCERTAINTY)   # not a constraint
+        evidence_close(sv, "u")
+        sv.reopen("u", "auditor", "the reading is questioned")
+        add_ees(sv, "ev-u-again", ["u"])
+        sv.attempt_closure("u", "chief-engineer", CUST, ["ev-u-again"])
         decision(sv, "d", ["u"], accept=False)
         add_ees(sv, "lab")
-        sv.accept_decision("d", "director", "I accept", evidence_ids=["lab"])
+        sv.accept_decision("d", "director", "I accept", evidence_ids=["lab"],
+                           risk_claim="the reading holds", **RULE3)
+        attest(sv, "d")
     failures = strict.request_execution("d", "director").failures
     assert len(failures) == 1 and failures[0].startswith("coherence")
     assert lax.request_execution("d", "director").permitted
@@ -439,37 +464,96 @@ def test_override_logged_with_identity_rationale_and_time(sv):
 
 # ===========================================================================
 # SCENE 12 — OPEN-LOOP IRREVERSIBLE EXECUTION
-# Proves: (Layer 4, Commitment State Machine; Key Definitions, Open-Loop
-# Irreversible Execution) overriding an irreversible gate latches each
-# constraint (or anomaly) loop still under review into trajectory_lock with
-# a LOCK_IN closure record, and the event is logged as open-loop
-# irreversible execution.
+# Proves: (Layer 4, Commitment State Machine, POST-EXECUTION LATCH; Key
+# Definitions, Open-Loop Irreversible Execution) overriding an irreversible
+# gate latches every loop the gate did not count as resolved into
+# executed_open, carrying the authorization record, and makes the overrider
+# its steward. No lock-in closure is recorded.
 # ===========================================================================
 
-def test_override_latches_open_constraints_into_trajectory_lock(sv):
+def test_override_latches_unresolved_loops_into_executed_open(sv):
     """
-    Constraints under review become trajectory_lock with a LOCK_IN record;
-    a non-constraint stays under review.
+    A constraint under review, a constraint closed by authority, and an
+    open uncertainty are latched; an evidence-closed uncertainty is not.
 
     Enter:   sv   fixture
-    Exit:    passes if "c" is trajectory_lock with a LOCK_IN record carrying
-             the override rationale, "u" is untouched, and
-             OPEN_LOOP_IRREVERSIBLE_EXECUTION lists "c" as locked
+    Exit:    passes if c, c-auth and u are executed_open with an
+             OpenLoopAuthorization naming the overrider, the rationale and
+             the decision; their steward is the overrider (logged); "u-ok"
+             is untouched; no LOCK_IN record exists; the log lists the
+             latched loops
     """
     # PLAYERS IN THIS SCENE
     #   result   the GateResult
-    #   rec      the lock-in ClosureRecord on "c"
+    #   sid      each latched signal id
+    #   auth     its authorization record
 
     to_review(sv, "c")
+    to_review(sv, "c-auth")
+    sv.attempt_closure("c-auth", "vp", CUST)                       # authority closure
     to_review(sv, "u", signal_type=SignalType.UNCERTAINTY)
-    decision(sv, "d", ["c", "u"])
+    to_review(sv, "u-ok", signal_type=SignalType.UNCERTAINTY)
+    evidence_close(sv, "u-ok")
+    decision(sv, "d", ["c", "c-auth", "u", "u-ok"])
     result = sv.request_execution("d", "risk-officer", override_rationale="proceed")
-    assert result.locked_signals == ["c"]
-    assert sv.signals["c"].state == S.TRAJECTORY_LOCK
-    rec = sv.signals["c"].closures[-1]
-    assert rec.closure_type == ClosureType.LOCK_IN and rec.rationale == "proceed"
-    assert sv.signals["u"].state == S.UNDER_REVIEW
-    assert entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION")[0].payload["locked"] == ["c"]
+    assert result.permitted and result.overridden
+    assert result.latched_signals == ["c", "c-auth", "u"]
+    for sid in ("c", "c-auth", "u"):
+        assert sv.signals[sid].state == S.EXECUTED_OPEN
+        [auth] = sv.signals[sid].open_loop_authorizations
+        assert (auth.decision_id, auth.authorized_by, auth.rationale, auth.emergency_id) == \
+            ("d", "risk-officer", "proceed", None)
+        assert sv.signals[sid].steward == "risk-officer"
+    assert sv.signals["c-auth"].open_loop_authorizations[0].prior_state == "closed_authority"
+    # The authority closure stays in the loop's history.
+    assert sv.signals["c-auth"].closures[0].closure_type == ClosureType.AUTHORITY
+    assert sv.signals["u-ok"].state == S.CLOSED_EVIDENCE
+    assert not any(c.closure_type == ClosureType.LOCK_IN
+                   for x in sv.signals.values() for c in x.closures)
+    assert entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION")[0].payload["latched"] == \
+        ["c", "c-auth", "u"]
+    assert [e.payload["signal"] for e in entries(sv, "STEWARD_ASSIGNED")] == ["c", "c-auth", "u"]
+
+
+# ===========================================================================
+# SCENE 12b — EVERY KIND OF UNRESOLVED CONSTRAINT IS LATCHED
+# Proves: "That covers a constraint or anomaly loop not evidence-closed,
+# whatever state it was in — open, closed by authority or role switch, or
+# exited" — including exits that end the loop (terminal) and an evidence
+# closure that is not chain-sound.
+# ===========================================================================
+
+def test_override_latches_exited_role_switch_and_unsound_constraints(sv):
+    """
+    Enter:   sv   fixture
+    Exit:    passes if the terminal-exited, role-switch-closed and
+             chain-unsound constraints all end executed_open, and the
+             chain-sound one stays closed
+    """
+    # PLAYERS IN THIS SCENE
+    #   result   the GateResult
+
+    to_review(sv, "c-term")
+    sv.exit("c-term", ExitType.TERMINAL, "steward", "abandoned", open_loop_state="open")
+    to_review(sv, "c-rs", by="lund")
+    sv.attempt_closure("c-rs", "lund", CUST)                        # role switch
+    to_review(sv, "rig")
+    sv.attempt_closure("rig", "vp", CUST)                           # authority
+    to_review(sv, "c-weak")
+    add_ees(sv, "on-rig")
+    sv.add_dependency("on-rig", "rig", "clerk")
+    sv.attempt_closure("c-weak", "chief-engineer", CUST, ["on-rig"])
+    to_review(sv, "c-good")
+    evidence_close(sv, "c-good")
+    decision(sv, "d", ["c-term", "c-rs", "c-weak", "c-good"])
+    for r in sv.open_reviews():                                     # role switch escalated
+        sv.resolve_review(r.review_id, "review-board", **UPDATE)
+    result = sv.request_execution("d", "risk-officer", override_rationale="proceed")
+    assert result.permitted, result.failures
+    assert sorted(result.latched_signals) == ["c-rs", "c-term", "c-weak"]
+    assert sv.signals["c-term"].state == S.EXECUTED_OPEN
+    assert sv.signals["c-term"].exit is not None                    # history kept
+    assert sv.signals["c-good"].state == S.CLOSED_EVIDENCE
 
 
 # ===========================================================================
@@ -597,7 +681,7 @@ def test_elevated_override_does_not_lock(sv):
     sv.register_signal("u", SignalType.UNCERTAINTY, "d", "eng", TECH, PROCESS)
     decision(sv, "d", ["c", "u"], X.ELEVATED)
     result = sv.request_execution("d", "risk-officer", override_rationale="proceed")
-    assert result.permitted and result.overridden and result.locked_signals == []
+    assert result.permitted and result.overridden and result.latched_signals == []
     assert sv.signals["c"].state == S.UNDER_REVIEW
     assert entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION") == []
 
@@ -850,15 +934,18 @@ def test_those_who_want_it_cannot_resolve_the_review(sv):
     decision(sv, "d", ["c"])
     sv.request_execution("d", "launch-manager")     # a requester
     [review] = sv.open_reviews()
+    # The off-envelope review is resolved by evidence-based reclassification.
+    add_ees(sv, "envelope-test")
+    sv.classify("c", O.ELEVATED_UNCERTAINTY, "test-engineer", ["envelope-test"])
     for conflicted in ("director", "launch-manager"):
         with pytest.raises(TransitionRefused):
-            sv.resolve_review(review.review_id, conflicted, "it is fine")
+            sv.resolve_review(review.review_id, conflicted, finding="it is fine")
     assert len(entries(sv, "REVIEW_RESOLUTION_REFUSED")) == 2
     sv.resolve_review(review.review_id, "review-board",
-                      "off-envelope operation now requires test data before any waiver")
+                      finding="tested at the condition; within the extended envelope")
     result = sv.request_execution("d", "launch-manager", override_rationale="proceed")
     assert result.permitted and result.overridden
-    assert sv.signals["c"].state == S.TRAJECTORY_LOCK
+    assert sv.signals["c"].state == S.EXECUTED_OPEN
 
 
 # ===========================================================================
@@ -880,12 +967,12 @@ def test_suppressed_signal_holds_until_back_in_view(sv):
     decision(sv, "d", ["c"])
     assert not sv.request_execution("d", "risk-officer", override_rationale="go").permitted
     for r in sv.open_reviews():
-        sv.resolve_review(r.review_id, "review-board", "suppression is now itself escalated")
+        sv.resolve_review(r.review_id, "review-board", **UPDATE)
     # Still suppressed: the next request opens a new review, which holds.
     assert not sv.request_execution("d", "ops", override_rationale="go").permitted
     sv.reenter_suppressed("c", "review-board", "back in view")
     for r in sv.open_reviews():
-        sv.resolve_review(r.review_id, "review-board", "suppression is now itself escalated")
+        sv.resolve_review(r.review_id, "review-board", **UPDATE)
     assert sv.request_execution("d", "ops2", override_rationale="go").permitted
 
 
@@ -906,7 +993,7 @@ def test_override_needs_override_power_when_authority_is_enforced():
     sv.grant("director", Power.AUTHORIZE, "d", by="root")
     sv.grant("ops", Power.EXECUTE, "d", by="root")
     to_review(sv, "c")
-    decision(sv, "d", ["c"])
+    decision(sv, "d", ["c"], root="root")
     refused = sv.request_execution("d", "ops", override_rationale="go")
     assert not refused.permitted
     assert any("does not hold override" in f for f in refused.failures)

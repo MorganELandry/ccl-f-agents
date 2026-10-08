@@ -732,6 +732,9 @@ class RemoteSignal:
       state             its latest commitment state
       operational_state its latest classification, if any
       closure           the latest TRANSITION entry into a closed state, or None
+      exit              the latest EXIT entry, or None (a superseded exit
+                        citing an External Evidence Source resolves an
+                        upstream loop: Layer 2, Closure Chain)
     """
     signal_id: str
     signal_type: str
@@ -746,6 +749,7 @@ class RemoteSignal:
     state: str = "registered"
     operational_state: Optional[str] = None
     closure: Optional[AuditEntry] = None
+    exit: Optional[AuditEntry] = None
 
 
 @dataclass
@@ -787,7 +791,8 @@ def parse_log(entries: Iterable[AuditEntry]) -> ParsedLog:
     taken on trust. Checked: every registration is a signal's first entry
     and happens once; every TRANSITION starts from the state the signal is
     in and is a move the Layer 4 table allows; EXIT only from an open
-    state, REENTRY only from exited; MIRROR_REGISTERED names a signal
+    state, REENTRY only from exited; DEPENDENCY_ADDED only for evidence on
+    record; MIRROR_REGISTERED names a signal
     registered in the entry just before it, so a loop cannot be relabeled
     a mirror after the fact; evidence ids are unique; required fields are
     present and of the right type.
@@ -844,6 +849,7 @@ def parse_log(entries: Iterable[AuditEntry]) -> ParsedLog:
                 bad(f"exit of {sid!r} from a state it is not in, or not open")
             else:
                 sig.state = "exited"
+                sig.exit = e
         elif e.event == "REENTRY":
             if sig is None or sig.state != "exited":
                 bad(f"re-entry of {sid!r}, which has not exited")
@@ -875,6 +881,14 @@ def parse_log(entries: Iterable[AuditEntry]) -> ParsedLog:
             else:
                 out.evidence[eid] = {"kind": p["kind"], "produced_by": p["produced_by"],
                                      "at": e.at, "depends_on": list(p.get("depends_on", []))}
+        elif e.event == "DEPENDENCY_ADDED":
+            # A dependency found later (Supervisor.add_dependency): the
+            # evidence now rests on one more upstream loop.
+            eid, up = p.get("evidence"), p.get("upstream")
+            if eid not in out.evidence or not isinstance(up, str):
+                bad(f"dependency added to unknown evidence {eid!r}")
+            elif up not in out.evidence[eid]["depends_on"]:
+                out.evidence[eid]["depends_on"].append(up)
     return out
 
 
@@ -899,6 +913,27 @@ def _remote_evidence(entries: Iterable[AuditEntry]) -> dict[str, dict]:
     return parse_log(entries).evidence
 
 
+def _remote_ees(record: dict, sig: RemoteSignal, claimant: str) -> bool:
+    """
+    The External Evidence Source test on a peer's evidence record, by the
+    same one definition the Supervisor uses (Supervisor.is_ees).
+
+    Enter:   record     the evidence record ({"kind", "produced_by", ...})
+             sig        the RemoteSignal the claim is about
+             claimant   the agent making the claim (the closing or exiting
+                        agent: the actor of that log entry)
+    Exit:    True if the kind is eligible and the producer is neither the
+             claimant nor the signal's evaluated process
+
+    Spec (Layer 2, EES): the producer is not "the agent making the claim it
+    is offered for (the closing agent, for a closure ...)" nor "any process
+    whose output the claim evaluates". The registrant is not excluded as
+    such.
+    """
+    return (record["kind"] in {k.value for k in EES_ELIGIBLE_KINDS}
+            and record["produced_by"] not in (sig.evaluated_process, claimant))
+
+
 def _remote_qualifying(sig: RemoteSignal, evidence: dict[str, dict]) -> list[str]:
     """
     Recompute which cited evidence of a peer's closure is novel and EES,
@@ -906,13 +941,31 @@ def _remote_qualifying(sig: RemoteSignal, evidence: dict[str, dict]) -> list[str
 
     Enter:   sig        the RemoteSignal (must have a closure)
              evidence   the peer's evidence records
-    Exit:    the qualifying evidence ids
+    Exit:    the qualifying evidence ids; the claimant is the agent who
+             made the closure (the closure entry's actor)
     """
     return [eid for eid in sig.closure.payload.get("cited_evidence", [])
             if eid in evidence
             and eid not in sig.at_registration and evidence[eid]["at"] > sig.registered_at
-            and evidence[eid]["kind"] in {k.value for k in EES_ELIGIBLE_KINDS}
-            and evidence[eid]["produced_by"] not in (sig.evaluated_process, sig.registrant)]
+            and _remote_ees(evidence[eid], sig, sig.closure.actor)]
+
+
+def _remote_superseded(sig: RemoteSignal, evidence: dict[str, dict]) -> list[str]:
+    """
+    For a peer's loop exited as superseded: the cited evidence that is an
+    External Evidence Source for the exiting agent's claim.
+
+    Enter:   sig        the RemoteSignal
+             evidence   the peer's evidence records
+    Exit:    the qualifying ids (empty unless the loop is exited superseded)
+
+    Mirrors Supervisor._supersession_shown.
+    """
+    if sig.state != "exited" or sig.exit is None \
+            or sig.exit.payload.get("exit_type") != "superseded":
+        return []
+    return [eid for eid in sig.exit.payload.get("evidence", []) or []
+            if eid in evidence and _remote_ees(evidence[eid], sig, sig.exit.actor)]
 
 
 # ===========================================================================
@@ -947,9 +1000,10 @@ def _remote_sound(entries: list[AuditEntry], signal_id: str, owner: str = "",
     Exit:    (sound?, the qualifying evidence ids that make it so)
 
     The same least-fixed-point rule as Supervisor._closure_sound: at least
-    one qualifying item whose upstream loops are all sound, no cycles. A
-    mirror is sound only if the loop it stands for is sound in its owner's
-    log too, so a node cannot vouch for a loop it does not own.
+    one qualifying item, and every cited item's upstream loops resolved
+    (chain-sound, or superseded with an EES), no cycles. A mirror is sound
+    only if the loop it stands for is sound in its owner's log too, so a
+    node cannot vouch for a loop it does not own.
     """
     # PLAYERS IN THIS SCENE
     #   key        this (log, signal) pair, for the cycle guard
@@ -963,6 +1017,10 @@ def _remote_sound(entries: list[AuditEntry], signal_id: str, owner: str = "",
     if key in seen:
         return False, []
     sig = read_signal(entries, signal_id)
+    if sig is not None and sig.state == "exited":
+        # An upstream loop superseded with an EES is resolved (Closure Chain).
+        shown = _remote_superseded(sig, _remote_evidence(entries))
+        return bool(shown), shown
     if sig is None or sig.state != "closed_evidence" or sig.closure is None:
         return False, []
     mirrors = _remote_mirrors(entries)
@@ -972,9 +1030,13 @@ def _remote_sound(entries: list[AuditEntry], signal_id: str, owner: str = "",
         if theirs is None or not _remote_sound(theirs, inner, peer, resolve, seen | {key})[0]:
             return False, []
     evidence = _remote_evidence(entries)
-    good = [eid for eid in _remote_qualifying(sig, evidence)
-            if all(_remote_sound(entries, up, owner, resolve, seen | {key})[0]
-                   for up in evidence[eid]["depends_on"])]
+    # Every cited item is load-bearing: each one's upstream loops must be
+    # resolved, not just one qualifying item's.
+    cited = [eid for eid in sig.closure.payload.get("cited_evidence", []) if eid in evidence]
+    if not all(_remote_sound(entries, up, owner, resolve, seen | {key})[0]
+               for eid in cited for up in evidence[eid]["depends_on"]):
+        return False, []
+    good = _remote_qualifying(sig, evidence)
     return bool(good), good
 
 
@@ -1312,7 +1374,7 @@ class Node:
         return (m.signal_type.value, m.registrant_referent.value, m.evaluated_process)
 
     def _verified(self, peer: str, signal_id: str, seen: frozenset = frozenset(),
-                  expect: Optional[tuple[str, str, str]] = None
+                  expect: Optional[tuple[str, str, str]] = None, upstream: bool = False
                   ) -> tuple[bool, list[str], Optional[tuple]]:
         """
         Does a peer's log show this loop closed by a chain-sound evidence
@@ -1324,16 +1386,23 @@ class Node:
                                    the loop must have: what the mirror was
                                    registered as, so the judgment is about
                                    the loop that was mirrored
+                 upstream          True when checking a loop some evidence
+                                   depends on: then a loop exited as
+                                   superseded with an External Evidence
+                                   Source (with a verified origin) also
+                                   counts as resolved (Layer 2, Closure
+                                   Chain)
         Exit:    (ok, reasons it failed, chosen) where chosen is
                  (evidence id, log record, Attestation, RemoteSignal, owner)
                  for the item that carries the closure, or None when ok is
                  False. For a mirror, the item comes from the owner's log.
 
         Each link is checked the same way: closed by evidence in its
-        owner's verified log; at least one qualifying item with a verified
-        origin and independent lineage; every loop that item depends on
-        verified in turn. A peer's mirror of a third node's loop is followed
-        to that node's own log, so the peer's word never stands in for the
+        owner's verified log; every loop that ANY cited item depends on
+        verified in turn ("every cited item is load-bearing"); and at least
+        one qualifying item with a verified origin and independent lineage.
+        A peer's mirror of a third node's loop is followed to that node's
+        own log, so the peer's word never stands in for the
         owner's. A mirror of one of this node's own loops is checked
         against this node's own Supervisor.
         """
@@ -1343,9 +1412,9 @@ class Node:
         #   mirrors    the peer's declared mirrors
         #   owner, inner   for a mirror: whose loop it is, and its id there
         #   evidence   the peer's evidence records
-        #   reasons    why each candidate failed
-        #   eid, ev    each qualifying item and its record
-        #   bad_up     upstream loops of an item that do not verify, with why
+        #   reasons    why each cited item's chain, or each candidate, failed
+        #   eid, ev    each cited (then each qualifying) item and its record
+        #   bad_up     upstream loops of a cited item that do not verify, with why
         #   att, why   the origin check for an item
 
         key = (peer, signal_id)
@@ -1357,6 +1426,17 @@ class Node:
         if seg is None:
             return False, [f"no verified log from {peer}"], None
         rs = read_signal(seg.entries, signal_id)
+        if upstream and rs is not None and rs.state == "exited":
+            # --- An upstream loop superseded with an EES -------------------
+            evidence = _remote_evidence(seg.entries)
+            reasons = []
+            for eid in _remote_superseded(rs, evidence):
+                att, why = self._check_item(peer, seg, rs, eid, evidence[eid])
+                if att is not None:
+                    return True, [], None
+                reasons.append(why)
+            return False, reasons or [f"{peer}'s {signal_id} exited without a supersession "
+                                      "shown by an External Evidence Source"], None
         if rs is None or rs.state != "closed_evidence" or rs.closure is None:
             return False, [f"{peer}'s log does not show {signal_id} closed by evidence"], None
         if expect is not None and (rs.signal_type, rs.referent, rs.evaluated_process) != expect:
@@ -1380,16 +1460,22 @@ class Node:
                 owner, inner, seen | {key},
                 expect=(rs.signal_type, rs.referent, rs.evaluated_process))
             return ok, [f"via {peer}: {r}" for r in reasons], chosen
+        # --- Every cited item is load-bearing: all their upstream loops ---
         reasons: list[str] = []
-        for eid in qualifying:
-            ev = evidence[eid]
-            bad_up = {up: self._verified(peer, up, seen | {key})
-                      for up in ev["depends_on"]}
+        for eid in rs.closure.payload.get("cited_evidence", []):
+            if eid not in evidence:
+                continue
+            bad_up = {up: self._verified(peer, up, seen | {key}, upstream=True)
+                      for up in evidence[eid]["depends_on"]}
             bad_up = {up: r for up, (ok, r, _) in bad_up.items() if not ok}
             if bad_up:
                 reasons.append(f"{eid}: upstream loop(s) at {peer} do not verify: " +
                                "; ".join(f"{up} ({', '.join(r)})" for up, r in bad_up.items()))
-                continue
+        if reasons:
+            return False, reasons, None
+        # --- One qualifying item with a verified origin carries it ---------
+        for eid in qualifying:
+            ev = evidence[eid]
             att, why = self._check_item(peer, seg, rs, eid, ev)
             if att is None:
                 reasons.append(why)

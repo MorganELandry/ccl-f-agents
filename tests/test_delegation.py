@@ -47,6 +47,8 @@ THE PLAYBILL
 # pytest    fixtures, raises, parametrize.
 # cclf      the Supervisor and its vocabulary.
 # cclf.federation   nodes, signed grants and revocations.
+# stagehands        RULE3, the Rule 3 registration a passing acceptance needs;
+#                   attest(), the independent risk-evidence attestation.
 # ===========================================================================
 
 import random
@@ -56,6 +58,7 @@ import pytest
 from cclf import (EvidenceKind, ExecutionClass, Power, Settings, Supervisor,
                   TransitionRefused)
 from cclf.federation import AgentKey, Node, sign_grant, sign_revocation
+from stagehands import RULE3, attest
 
 
 # ===========================================================================
@@ -66,6 +69,12 @@ from cclf.federation import AgentKey, Node, sign_grant, sign_revocation
 # SCOPE — the bookings scope.
 ROOT = "traveler"
 SCOPE = "travel-booking"
+
+# RISK — the principal risk claim and Rule 3 registration a Rule 4 acceptance
+#   needs for the irreversible gate (October 2026), as accept_decision
+#   keywords. The fare quote cited with it is the claim's External Evidence
+#   Source.
+RISK = dict(risk_claim="the fare is as quoted and refundable", **RULE3)
 
 
 class Clock:
@@ -109,8 +118,10 @@ def sv(clock) -> Supervisor:
 
 
 def accept(sv: Supervisor, who: str) -> None:
-    """`who` gives the Rule 4 acceptance, citing the fare quote."""
-    sv.accept_decision("book-flight", who, "approved", evidence_ids=["fare-quote"])
+    """`who` gives the Rule 4 acceptance, citing the fare quote, and the
+    attester attests it."""
+    sv.accept_decision("book-flight", who, "approved", evidence_ids=["fare-quote"], **RISK)
+    attest(sv, "book-flight", root=ROOT)
 
 
 # ===========================================================================
@@ -221,7 +232,8 @@ def test_cross_node_revocation_and_its_window(clock):
     for d in ("trip-1", "trip-2", "trip-3"):
         node.sv.register_decision(d, d, ExecutionClass.IRREVERSIBLE, [], "B")
         node.sv.assign_scope(d, SCOPE, by=ROOT)
-        node.sv.accept_decision(d, "B", "approved", evidence_ids=["q"])
+        node.sv.accept_decision(d, "B", "approved", evidence_ids=["q"], **RISK)
+        attest(node.sv, d, root=ROOT)
     # The traveler signs a revocation. Until it arrives, the node cannot
     # know: trip-1 goes ahead. This is the window, stated, not hidden.
     revocation = sign_revocation(keys[ROOT], g, "trip cancelled")
@@ -253,7 +265,8 @@ def test_expiry_bounds_the_window_when_a_revocation_never_arrives(clock):
     node.sv.add_evidence("q", "fare", "airline", EvidenceKind.PRIMARY_DOCUMENT, "airline", "B")
     node.sv.register_decision("trip", "trip", ExecutionClass.IRREVERSIBLE, [], "B")
     node.sv.assign_scope("trip", SCOPE, by=ROOT)
-    node.sv.accept_decision("trip", "B", "approved", evidence_ids=["q"])
+    node.sv.accept_decision("trip", "B", "approved", evidence_ids=["q"], **RISK)
+    attest(node.sv, "trip", root=ROOT)
     clock.t += 61                      # the revocation was lost; the grant lapses anyway
     assert not node.sv.request_execution("trip", "D").permitted
 

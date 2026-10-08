@@ -24,15 +24,23 @@ signal's suppression of the open uncertainty, escalates the decision's three
 authority closures when the decision is registered and the suppressed signal
 when execution is requested, and blocks the irreversible launch decision.
 
-The override is then refused, for two reasons the draft has stated since
+The override is then refused, for three reasons the draft has stated since
 October 2026 (Layer 4, Execution Gates, Overrides). Four structural reviews
 are unresolved, and a structural review holds irreversible execution until
-it documents its Rule 8 model update; that cannot be overridden. And the
-agent overriding is the agent who accepted the decision, which an override
-may not be. The launch does not execute. The only way forward the runtime
-leaves open is the one the draft names: someone who neither accepted nor
-requested the launch documents what the five recurring erosion waivers
-mean for the coordination model.
+it is resolved by what its trigger requires (the off-envelope O-ring by an
+evidence-based reclassification, the others by a Rule 8 model update); that
+cannot be overridden. The failure mode has no steward or successor, a
+Layer 0 void, which "cannot be overridden" at an irreversible decision.
+And the agent overriding is the agent who accepted the decision, which an
+override may not be. The gate also records that the acceptance names no
+principal risk claim and no Rule 3 registration (what was known, assumed
+and uncertain). The launch does not execute. The only way forward the
+runtime leaves open is the one the draft names: someone who neither
+accepted nor requested the launch resolves each review, the architecture
+is registered, and a different agent then authorizes the loops carried
+open (tests/test_scenarios.py, Scene 7). No Emergency Justification is
+available: the recurrence, authority-count and suppression reviews record
+failures of the coordination process, not conditions of the world.
 
 (Before October 2026 the override went through: the launch executed, and
 the open constraints, escalated by then, were listed as still open but
@@ -220,8 +228,9 @@ CHALLENGER: list[dict] = [
     # the frame). Rule 4 acceptance, then an execution request (blocked; it
     # also escalates the suppressed seal-uncertainty signal), then the same
     # request with an override_rationale, which is refused: the unresolved
-    # structural reviews hold irreversible execution, and the accepting agent
-    # cannot override its own decision's gate (Layer 4, Overrides).
+    # structural reviews hold irreversible execution, the Layer 0 void cannot
+    # be overridden, and the accepting agent cannot override its own
+    # decision's gate (Layer 4, Overrides).
     # =======================================================================
     # The signal list is built with + and a list comprehension (FRRs 2-6).
     {"op": "register_decision", "decision_id": "launch-51L",

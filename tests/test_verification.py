@@ -1,6 +1,6 @@
 """
 THE MODELS AND THE CODE AGREE
-A Play in Fifteen Scenes
+A Play in Eighteen Scenes
 ==============================
 
 PROLOGUE
@@ -43,6 +43,12 @@ THE PLAYBILL
                                                       parametrized, 9 runs)
     Scene 15 test_tlc_catches_review_hold_faults     (needs Java + TLA2TOOLS_JAR;
                                                       parametrized, 2 runs)
+    Scene 16 test_tlc_catches_latch_and_gate_faults  (needs Java + TLA2TOOLS_JAR;
+                                                      parametrized, 10 runs)
+    Scene 17 test_tlc_emergency_holds_and_happens    (needs Java + TLA2TOOLS_JAR;
+             test_tlc_catches_emergency_faults        parametrized, 3 and 11 runs)
+    Scene 18 test_alloy_catches_october_faults       (needs Java + ALLOY_JAR;
+                                                      parametrized, 3 runs)
 
 READER'S NOTE — regular expressions
     re.findall(r'<<"(\\w+)", "(\\w+)">>', text) finds every TLA+ pair such as
@@ -79,7 +85,8 @@ import pytest
 
 from cclf.statemachine import OPEN_STATES, TRANSITIONS, reentry_allowed
 from cclf.types import (
-    EES_ELIGIBLE_KINDS, EXIT_LEAVES_LOOP_OPEN, ExecutionClass, ExitType, LegalSubtype,
+    EES_ELIGIBLE_KINDS, EXIT_LEAVES_LOOP_OPEN, EXTERNAL_EXITS, ExecutionClass, ExitType,
+    LegalSubtype,
 )
 
 
@@ -148,11 +155,144 @@ REVIEW_FAULTS = {
     "override-past-a-structural-review": (
         "  /\\ accepted /\\ ~executed /\\ ~RelabelOpen /\\ ~ReviewHold /\\ ~GateFor(AppliedNow)",
         "  /\\ accepted /\\ ~executed /\\ ~RelabelOpen /\\ ~GateFor(AppliedNow)",
-        ("NoIrreversibleExecutionPastReview", "OverrideLatchesReviews")),
+        ("NoIrreversibleExecutionPastReview", "NoOpenLoopAfterIrreversibleExecution")),
     "suppressed-loops-do-not-hold": (
         'HeldStates == {"escalated", "suppressed"}',
         'HeldStates == {"escalated"}',
-        ("NoIrreversibleExecutionPastReview", "OverrideLatchesReviews")),
+        ("NoIrreversibleExecutionPastReview", "NoOpenLoopAfterIrreversibleExecution")),
+}
+
+# ONE_SIGNAL_CFG — the lifecycle configuration with one signal and a
+#   6-record log (exits on): just deep enough to register, exit, accept and
+#   execute or override. LIFECYCLE6_CFG — both signals, a 6-record log:
+#   deep enough for one signal to exit and the other to close by evidence.
+ONE_SIGNAL_CFG = (TLA_FILE.with_suffix(".cfg").read_text()
+                  .replace("MaxLog = 8", "MaxLog = 6")
+                  .replace("Signals = {s1, s2}", "Signals = {s1}"))
+LIFECYCLE6_CFG = FAST_CFG.replace("MaxLog = 5", "MaxLog = 6")
+# ONE_SIGNAL_GATE_CFG — ONE_SIGNAL_CFG without
+#   NoOpenLoopAfterIrreversibleExecution, which sees a terminal exit left
+#   standing after a clean pass too and would be reported first; without
+#   it, the scene shows the gate property catching the fault on its own.
+ONE_SIGNAL_GATE_CFG = ONE_SIGNAL_CFG.replace("    NoOpenLoopAfterIrreversibleExecution\n", "")
+
+# EMERGENCY_CFG — the Emergency Justification configuration (two signals,
+#   off-envelope and containment reviews) at an 8-record log: deep enough
+#   to escalate, open a classification review, accept and justify.
+EMERGENCY_CFG = ((TLA_FILE.parent / "Emergency.cfg").read_text()
+                 .replace("MaxLog = 10", "MaxLog = 8"))
+
+# EMERGENCY_WITNESSES — Scene 17: properties that must FAIL, showing that a
+#   loop really is latched into executed_open, an Emergency Justification
+#   really is given, and one is given over a signal escalated by an
+#   off-envelope or containment review: name -> the configuration section
+#   it is added under (an invariant, or an action property).
+EMERGENCY_WITNESSES = {"NeverLatches": "INVARIANTS", "NeverEmergency": "INVARIANTS",
+                       "NeverEJOverEscalated": "PROPERTIES"}
+
+# LATCH_FAULTS — planted faults for Scene 16 (the post-execution latch, the
+#   gate's resolving exits, Closure Chain upstream, the decision's EES):
+#   name -> (current text, planted text, configuration, properties of
+#   which TLC must report one violated).
+LATCH_FAULTS = {
+    "latch-only-reviews": (            # the pre-October rule, latching only under_review
+        '            IF state[s] \\notin {"unregistered", "trajectory_lock", "executed_open"}'
+        ' /\\ ~Resolved(s)',
+        '            IF state[s] = "under_review"',
+        "review", ("NoOpenLoopAfterIrreversibleExecution",)),
+    "latch-skips-exits": (             # an exited constraint stays "exited"
+        '            IF state[s] \\notin {"unregistered", "trajectory_lock", "executed_open"}'
+        ' /\\ ~Resolved(s)',
+        '            IF state[s] \\notin {"unregistered", "trajectory_lock", "executed_open",'
+        ' "exited"} /\\ ~Resolved(s)',
+        "one-signal", ("NoOpenLoopAfterIrreversibleExecution",)),
+    "override-locks": (                # the override latches into trajectory_lock
+        '              THEN "executed_open" ELSE state[s]]',
+        '              THEN "trajectory_lock" ELSE state[s]]',
+        "review", ("OverrideNeverLocks",)),
+    "executed-open-reopens": (         # a way back out of executed_open
+        '    <<"exited", "executed_open">> }',
+        '    <<"exited", "executed_open">>,\n    <<"executed_open", "under_review">> }',
+        "review", ("ExecutedOpenTerminal",)),
+    "terminal-exit-resolves": (        # the terminal-exit loophole, reopened
+        'ResolvingExits == {"superseded"}',
+        'ResolvingExits == {"terminal", "superseded"}',
+        "one-signal-gate", ("NoCleanPassOverNonResolvingExit",)),
+    "any-exit-resolves-upstream": (    # a terminal exit upstream counts as resolved
+        '                                          \\/ st[u] = "exited" /\\ xt[u] = "superseded"},',
+        '                                          \\/ st[u] = "exited"},',
+        "lifecycle6", ("SoundAllTheWayUp",)),
+    "latch-moves-external-exits": (    # a whistleblower or legal exit is latched
+        "               /\\ ~External(s)\n",
+        "",
+        "one-signal", ("ExternalExitKeptAtExecution",)),
+    "terminal-exit-kept-as-external": (   # a terminal exit escapes the latch
+        'ExternalExits == {"whistleblower", "legal"}',
+        'ExternalExits == {"whistleblower", "legal", "terminal"}',
+        "one-signal", ("NoOpenLoopAfterIrreversibleExecution",)),
+    "external-exit-resolves": (        # an external exit passes the gate
+        'ResolvingExits == {"superseded"}',
+        'ResolvingExits == {"superseded", "whistleblower", "legal"}',
+        "one-signal-gate", ("NoCleanPassOverNonResolvingExit",)),
+    "closures-supply-the-ees": (       # the pre-October decision-level EES
+        "DecisionEES == accEES\n",
+        "DecisionEES == accEES \\/ Sound /= {}\n",
+        "classes", ("NoCleanPassOverBrokenChain",)),
+}
+
+# EMERGENCY_FAULTS — planted faults for Scene 17 (Layer 4, Overrides,
+#   Emergency Justification): name -> (current text, planted text,
+#   properties of which TLC must report one violated). Each runs under
+#   EMERGENCY_CFG.
+EMERGENCY_FAULTS = {
+    "env-reviews-do-not-hold": (       # an override walks past an off-envelope review
+        'ReviewHold == AppliedNow = "irreversible" /\\ (NonSuspendableHeld \\/ SuspendableHeld)',
+        'ReviewHold == AppliedNow = "irreversible" /\\ NonSuspendableHeld',
+        ("SuspendableReviewNeedsEJ",)),
+    "ej-past-a-non-suspendable-review": (
+        "  /\\ ~NonSuspendableHeld                  \\* EJ: no non-suspendable review\n",
+        "",
+        ("NoIrreversibleExecutionPastReview",)),
+    "ej-without-a-hold": (
+        "  /\\ SuspendableHeld                      \\* EJ: held by a suspendable one\n",
+        "",
+        ("EJSuspendsWithoutResolving",)),
+    "ej-resolves-the-holds": (
+        "  /\\ UNCHANGED classVars                  \\* EJ: the holding reviews stay unresolved",
+        "  /\\ envRev' = [s \\in Signals |-> \"none\"]\n"
+        "  /\\ UNCHANGED <<declared, reversal, everBlocked, relabel, accEES, ruleRev>>",
+        ("EJSuspendsWithoutResolving",)),
+    "no-post-event-review": (
+        '                     Rec("post_event_review", "none", "none", "none") >>',
+        '                     Rec("open_loop_irreversible_execution", "none", "none", "none") >>',
+        ("EJOpensPostEventReview",)),
+    "unlogged-ej": (                   # the justification is not on record as one
+        '  /\\ log\' = log \\o << Rec("emergency_justification", "none", "none", "none"),',
+        '  /\\ log\' = log \\o << Rec("execution_permitted", "none", "none", "none"),',
+        ("OpenLoopExecutionLogged", "SuspendableReviewNeedsEJ")),
+    "rule8-review-hidden-by-env-review": (   # a recurrence review joining an
+        #   off-envelope hold is taken for part of it, and suspended with it
+        'EnvOnly(s) == state[s] = "escalated" /\\ ~ruleRev[s] /\\ envRev[s] /= "none"',
+        'EnvOnly(s) == state[s] = "escalated" /\\ envRev[s] /= "none"',
+        ("NoIrreversibleExecutionPastReview",)),
+    "recover-past-an-env-review": (    # the Rule 8 update releases the signal
+        #   while an off-envelope or containment review still names it
+        '  /\\ modelUpdate[s]\n  /\\ envRev[s] = "none"\n',
+        '  /\\ modelUpdate[s]\n',
+        ("EscalatedNeedsModelUpdate", "EnvReviewHoldsTheLoop")),
+    "env-resolution-releases-a-rule8-hold": (   # resolving the off-envelope
+        #   review releases a signal a Rule 8 review still holds
+        '  LET release == state[s] = "escalated" /\\ ~ruleRev[s]',
+        '  LET release == state[s] = "escalated"',
+        ("EscalatedNeedsModelUpdate",)),
+    "no-pending-escalation": (         # a signal arrives in review unescalated
+        'Arrive(s)     == IF envRev[s] /= "none" THEN "escalated" ELSE "under_review"',
+        'Arrive(s)     == "under_review"',
+        ("EnvReviewHoldsTheLoop",)),
+    "env-review-does-not-escalate": (  # the review opens, the signal stays in review
+        '  LET esc == state[s] = "under_review"\n',
+        '  LET esc == FALSE\n',
+        ("EnvReviewHoldsTheLoop",)),
 }
 
 # FED_CFG — the federation configuration at small bounds (histories of 2
@@ -212,19 +352,21 @@ FED_FAULTS = {
 #   text, configuration, the property TLC must report violated).
 CHAIN_FAULTS = {
     "ignore-upstream": (
-        '  ELSE SoundIter(st, {s \\in Signals : st[s] = "closed_evidence"\n'
-        '                                     /\\ \\A u \\in Signals : <<s, u>> \\in Upstream'
-        ' => u \\in known},',
-        '  ELSE SoundIter(st, {s \\in Signals : st[s] = "closed_evidence"},',
+        '  ELSE SoundIter(st, xt, {s \\in Signals : st[s] = "closed_evidence"\n'
+        '                                     /\\ \\A u \\in Signals : <<s, u>> \\in Upstream =>\n'
+        '                                          \\/ u \\in known\n'
+        '                                          \\/ st[u] = "exited" /\\ xt[u] = "superseded"},',
+        '  ELSE SoundIter(st, xt, {s \\in Signals : st[s] = "closed_evidence"},',
         "chain", "SoundAllTheWayUp"),
     "ignore-upstream-on-a-cycle": (
-        '  ELSE SoundIter(st, {s \\in Signals : st[s] = "closed_evidence"\n'
-        '                                     /\\ \\A u \\in Signals : <<s, u>> \\in Upstream'
-        ' => u \\in known},',
-        '  ELSE SoundIter(st, {s \\in Signals : st[s] = "closed_evidence"},',
+        '  ELSE SoundIter(st, xt, {s \\in Signals : st[s] = "closed_evidence"\n'
+        '                                     /\\ \\A u \\in Signals : <<s, u>> \\in Upstream =>\n'
+        '                                          \\/ u \\in known\n'
+        '                                          \\/ st[u] = "exited" /\\ xt[u] = "superseded"},',
+        '  ELSE SoundIter(st, xt, {s \\in Signals : st[s] = "closed_evidence"},',
         "cycle", "CycleNeverSound"),
     "silent-weakening": (
-        "      weakened == (Sound \\ SoundOf(after)) \\ {s}",
+        "      weakened == (Sound \\ SoundOf(after, exitType)) \\ {s}",
         "      weakened == {}",
         "chain", "ChainWeakeningLogged"),
     "no-ees-required": (
@@ -248,6 +390,24 @@ ALLOY_FAULTS = {
         "e.kind in EESKinds and e.producer not in d.loops.evaluated + d.acceptor",
         "e.kind in EESKinds and e.producer not in d.loops.evaluated",
         "AcceptorCannotSupplyTheEES"),
+}
+
+# ALLOY_OCTOBER_FAULTS — planted faults for Scene 18, each restoring a rule
+#   the October 2026 revision replaced: name -> (current text, planted
+#   text, the assertion the Analyzer must find a counterexample to).
+ALLOY_OCTOBER_FAULTS = {
+    "ees-excludes-the-registrant": (    # the old EES: registrant, not closer
+        "  e.producer not in c.closer + c.signal.evaluated\n",
+        "  e.producer not in c.signal.registrant + c.signal.evaluated\n",
+        "NoSelfCertification"),
+    "chain-needs-one-item": (           # the old chain: one clean item is enough
+        "                and all e: s.current.cites | e.dependsOn in known }",
+        "                and some e: qual[s] | e.dependsOn in known }",
+        "OneCleanItemDoesNotCarryTheRest"),
+    "loop-closures-supply-the-ees": (   # the old decision EES: sound closures count
+        "  d.acceptanceEvidence\n}",
+        "  d.acceptanceEvidence + { e: Evidence | some s: d.loops & Sound | e in qual[s] }\n}",
+        "LoopClosuresNeverSupplyTheEES"),
 }
 
 # CLASS_FAULTS — planted faults for Scene 9: name -> (current text, planted
@@ -341,14 +501,15 @@ def test_tla_transition_table_matches_code():
 
 # ===========================================================================
 # SCENE 2 — THE SAME GROUPS
-# Proves: open states, exit types, and the exits that leave a loop open are
+# Proves: open states, exit types, the exits that leave a loop open, and
+#   the exits to an external process (which the latch leaves in place) are
 #   the same in the model and the code.
 # ===========================================================================
 
 def test_tla_open_states_and_exit_groups_match_code():
     """
-    OpenStates, ExitTypes, LeavesOpen, LegalSubtypes and Classes agree
-    with the code.
+    OpenStates, ExitTypes, LeavesOpen, ExternalExits, LegalSubtypes and
+    Classes agree with the code.
 
     Enter:   (nothing)
     Exit:    passes if each pair of sets is identical
@@ -356,6 +517,7 @@ def test_tla_open_states_and_exit_groups_match_code():
     assert tla_set("OpenStates") == {s.value for s in OPEN_STATES}
     assert tla_set("ExitTypes") == {x.value for x in ExitType}
     assert tla_set("LeavesOpen") == {x.value for x in EXIT_LEAVES_LOOP_OPEN}
+    assert tla_set("ExternalExits") == {x.value for x in EXTERNAL_EXITS}
     assert tla_set("LegalSubtypes") == {s.value for s in LegalSubtype}
     assert tla_set("Classes") == {c.value for c in ExecutionClass}
 
@@ -460,6 +622,9 @@ def test_tlc_finds_no_violation(tmp_path):
     assert "No error has been found" in result.stdout, result.stdout[-3000:]
     result = run_tlc(TLA_FILE, CYCLE_CFG, tmp_path / "cycle")
     assert "No error has been found" in result.stdout, result.stdout[-3000:]
+    # The Emergency Justification configuration, at an 8-record log.
+    result = run_tlc(TLA_FILE, EMERGENCY_CFG, tmp_path / "emergency")
+    assert "No error has been found" in result.stdout, result.stdout[-3000:]
 
 
 # ===========================================================================
@@ -550,8 +715,15 @@ def test_tlc_catches_the_old_authority_gate(tmp_path):
     mutant = tmp_path / "src" / TLA_FILE.name
     mutant.parent.mkdir()
     mutant.write_text(TLA_TEXT.replace(new_gate, old_gate))
+    # Exits off: the old gate also let a terminal or legal exit pass, which
+    # NoCleanPassOverNonResolvingExit (Scene 16) would report first. And
+    # NoOpenLoopAfterIrreversibleExecution, which sees the same clean pass
+    # leave the closure standing, is left out, so that this scene shows
+    # the authority-closure property catching it on its own.
     cfg = (TLA_FILE.with_suffix(".cfg").read_text()
-           .replace("MaxLog = 8", "MaxLog = 6").replace("Signals = {s1, s2}", "Signals = {s1}"))
+           .replace("MaxLog = 8", "MaxLog = 6").replace("Signals = {s1, s2}", "Signals = {s1}")
+           .replace("Exits = TRUE", "Exits = FALSE")
+           .replace("    NoOpenLoopAfterIrreversibleExecution\n", ""))
     result = run_tlc(mutant, cfg, tmp_path)
     assert "NoCleanPassOverAuthorityClosure is violated" in result.stdout, result.stdout[-3000:]
 
@@ -765,5 +937,149 @@ def test_tlc_catches_review_hold_faults(tmp_path, fault):
     mutant.write_text(TLA_TEXT.replace(current, planted))
     result = run_tlc(mutant, REVIEW_CFG, tmp_path)
     assert any(f"{p} is violated" in result.stdout for p in props), result.stdout[-3000:]
+
+# ===========================================================================
+# SCENE 16 — WHAT THE OVERRIDE LEAVES BEHIND
+# Proves: the post-execution latch, the gate's resolving exits, the
+# upstream rule of Closure Chain and the decision's External Evidence
+# Source are each load-bearing. Latching only what is under review, or
+# skipping exited loops, leaves a constraint looking resolved after an
+# irreversible override (NoOpenLoopAfterIrreversibleExecution); latching
+# into trajectory_lock breaks OverrideNeverLocks; a way out of
+# executed_open breaks ExecutedOpenTerminal; latching a whistleblower or
+# legal exit breaks ExternalExitKeptAtExecution, and letting a terminal
+# exit escape the latch like one breaks
+# NoOpenLoopAfterIrreversibleExecution; counting a terminal or an
+# external exit as resolving breaks NoCleanPassOverNonResolvingExit;
+# counting any exit
+# upstream as resolved breaks SoundAllTheWayUp; letting loop closures
+# supply the decision's EES breaks NoCleanPassOverBrokenChain.
+# ===========================================================================
+
+@needs_tlc
+@pytest.mark.parametrize("fault", list(LATCH_FAULTS))
+def test_tlc_catches_latch_and_gate_faults(tmp_path, fault):
+    """
+    Plant one latch or gate fault; TLC must report a violation.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+             fault      a key of LATCH_FAULTS
+    Exit:    passes if TLC reports one of the fault's properties violated
+    """
+    # PLAYERS IN THIS SCENE
+    #   current, planted, which, props   the fault's four parts
+    #   cfg                              the configuration it runs under
+    #   mutant, result                   the planted copy and TLC's run
+
+    # --- Setting the stage: the fault's text must still be in the model ---
+    current, planted, which, props = LATCH_FAULTS[fault]
+    assert current in TLA_TEXT, fault
+    cfg = {"review": REVIEW_CFG, "one-signal": ONE_SIGNAL_CFG,
+           "one-signal-gate": ONE_SIGNAL_GATE_CFG,
+           "lifecycle6": LIFECYCLE6_CFG, "classes": CLASSES_CFG}[which]
+    mutant = tmp_path / "src" / TLA_FILE.name
+    mutant.parent.mkdir()
+    mutant.write_text(TLA_TEXT.replace(current, planted))
+    # --- The action: check the planted copy ---
+    result = run_tlc(mutant, cfg, tmp_path)
+    # --- The verdict: TLC names a property the fault breaks ---
+    assert any(f"{p} is violated" in result.stdout for p in props), result.stdout[-3000:]
+
+
+# ===========================================================================
+# SCENE 17 — AN EMERGENCY SUSPENDS, IT DOES NOT RESOLVE
+# Proves: the Emergency Justification really happens in the model, really
+# latches loops, and is really given over a signal escalated by an
+# off-envelope or containment review (the witnesses fail), and each of its
+# limits is needed. Letting an override past an off-envelope review, a
+# justification past a non-suspendable review or with no hold at all, one
+# that resolves the reviews it suspends, one with no post-event review,
+# or one not on record as a justification: TLC catches each. So it does a
+# recurrence review hidden behind an off-envelope one, a release from
+# escalated while a review still holds the signal, and a signal left in
+# review, unescalated, under an off-envelope or containment review.
+# ===========================================================================
+
+@needs_tlc
+@pytest.mark.parametrize("witness", list(EMERGENCY_WITNESSES))
+def test_tlc_emergency_holds_and_happens(tmp_path, witness):
+    """
+    Add a witness ("this never happens"); TLC must refute it.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+             witness    a key of EMERGENCY_WITNESSES
+    Exit:    passes if TLC reports the witness violated
+    """
+    # PLAYERS IN THIS SCENE
+    #   section        INVARIANTS or PROPERTIES: where the witness goes
+    #   cfg, result    the configuration with it added, and TLC's run
+
+    section = EMERGENCY_WITNESSES[witness]
+    cfg = EMERGENCY_CFG.replace(f"{section}\n", f"{section}\n    {witness}\n")
+    result = run_tlc(TLA_FILE, cfg, tmp_path)
+    assert f"{witness} is violated" in result.stdout, result.stdout[-3000:]
+
+
+@needs_tlc
+@pytest.mark.parametrize("fault", list(EMERGENCY_FAULTS))
+def test_tlc_catches_emergency_faults(tmp_path, fault):
+    """
+    Plant one Emergency Justification fault; TLC must report a violation.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+             fault      a key of EMERGENCY_FAULTS
+    Exit:    passes if TLC reports one of the fault's properties violated
+    """
+    # PLAYERS IN THIS SCENE
+    #   current, planted, props   the fault's three parts
+    #   mutant, result            the planted copy and TLC's run
+
+    current, planted, props = EMERGENCY_FAULTS[fault]
+    assert current in TLA_TEXT, fault
+    mutant = tmp_path / "src" / TLA_FILE.name
+    mutant.parent.mkdir()
+    mutant.write_text(TLA_TEXT.replace(current, planted))
+    result = run_tlc(mutant, EMERGENCY_CFG, tmp_path)
+    assert any(f"{p} is violated" in result.stdout for p in props), result.stdout[-3000:]
+
+
+# ===========================================================================
+# SCENE 18 — THE OLD RULES, PLANTED BACK IN ALLOY
+# Proves: the October 2026 closure-typing and Closure Chain assertions are
+# not vacuous. Excluding the registrant instead of the closing agent from
+# the External Evidence Source (NoSelfCertification), letting one clean
+# item carry a closure (OneCleanItemDoesNotCarryTheRest), and letting loop
+# closures supply the decision's EES (LoopClosuresNeverSupplyTheEES): the
+# Analyzer finds a counterexample to each.
+# ===========================================================================
+
+@needs_alloy
+@pytest.mark.parametrize("fault", list(ALLOY_OCTOBER_FAULTS))
+def test_alloy_catches_october_faults(tmp_path, fault):
+    """
+    Plant one pre-October rule in a copy of the Alloy model; its assertion
+    must fail.
+
+    Enter:   tmp_path   pytest's per-test scratch directory
+             fault      a key of ALLOY_OCTOBER_FAULTS
+    Exit:    passes if the Analyzer reports that check satisfiable (a
+             counterexample exists)
+    """
+    # PLAYERS IN THIS SCENE
+    #   current, planted, name   the fault's three parts
+    #   mutant                   the planted copy of the model
+    #   result                   the Alloy run
+    #   line                     the summary line for that check
+
+    current, planted, name = ALLOY_OCTOBER_FAULTS[fault]
+    assert current in ALLOY_TEXT, fault
+    mutant = tmp_path / ALLOY_FILE.name
+    mutant.write_text(ALLOY_TEXT.replace(current, planted))
+    result = subprocess.run(
+        ["java", "-jar", ALLOY, "exec", "-f", "-c", name, "-o", str(tmp_path / "out"),
+         str(mutant)], capture_output=True, text=True, timeout=600)
+    line = next(l for l in (result.stdout + result.stderr).splitlines()
+                if re.search(rf"check {name}\b", l))
+    assert line.split()[-1] == "SAT", line
 
 # EXEUNT — end of file.

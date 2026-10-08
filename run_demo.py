@@ -12,6 +12,8 @@ Usage:
     python run_demo.py challenger
     python run_demo.py therac25
     python run_demo.py mcas
+    python run_demo.py apollo13                    # an Emergency Justification
+    python run_demo.py usair1549                   # one given on scene
     python run_demo.py challenger --quiet          # summary only
     python run_demo.py challenger --audit out.json # where to write the audit trail
     python run_demo.py challenger --no-obs         # no OpenTelemetry
@@ -34,10 +36,11 @@ READER'S NOTE — the colour codes
     as "switch to red" instead of printing them. "\\033[0m" (RESET) switches
     back to normal. Wrapping text as f"{RED}...{RESET}" colours just that
     text. If output is redirected to a file, the codes appear as raw bytes.
-    The colours used here: RED for refusals, blocked gates, overrides and
-    open-loop execution; YELLOW for rejected classifications, escalations
-    and attempted closures; GREEN for permitted execution; CYAN for the
-    title and for TRANSITION entries worth noticing (see Scene 2).
+    The colours used here: RED for refusals, blocked gates, overrides,
+    Emergency Justifications and open-loop execution; YELLOW for rejected
+    classifications, escalations, suspended reviews, ineffective updates and
+    attempted closures; GREEN for permitted execution; CYAN for the title
+    and for TRANSITION entries worth noticing (see Scene 2).
 
 READER'S NOTE — audit-entry diffing
     The supervisor's audit trail is append-only, so the entries added by
@@ -90,11 +93,15 @@ HIGHLIGHT_EVENTS = {
     "EXECUTION_BLOCKED": RED, "GATE_OVERRIDE": RED, "OPEN_LOOP_IRREVERSIBLE_EXECUTION": RED,
     "OVERRIDE_REFUSED": RED, "EXECUTION_REFUSED": RED,
     "EXECUTION_PERMITTED": GREEN, "ATTEMPTED_CLOSURE": YELLOW,
+    "EMERGENCY_JUSTIFICATION": RED, "EMERGENCY_REFUSED": RED, "REVIEW_SUSPENDED": YELLOW,
+    "UPDATE_INEFFECTIVE": YELLOW, "LATE_DEPENDENCY": YELLOW,
+    "RISK_EVIDENCE_ATTESTED": GREEN, "RISK_ATTESTATION_REFUSED": RED,
 }
 
 # INTERESTING_STATES — commitment states (as their string values) that make
 #   a TRANSITION entry worth printing even when it is not a closure.
-INTERESTING_STATES = {"suppressed", "escalated", "trajectory_lock", "under_review"}
+INTERESTING_STATES = {"suppressed", "escalated", "trajectory_lock", "executed_open",
+                      "under_review"}
 
 
 # ===========================================================================
@@ -108,7 +115,8 @@ def describe(entry) -> str:
 
     Enter:   entry   a cclf.audit.AuditEntry (uses .event, .payload, .actor)
     Exit:    a string; one line for most events, several (indented) for a
-             blocked or overridden gate, which lists each failure
+             blocked or overridden gate, which lists each failure, and for
+             an Emergency Justification, which lists its elements
 
     Unknown event types fall back to the payload as JSON, cut to 120
     characters. The payload keys read here are the ones the Supervisor
@@ -142,18 +150,36 @@ def describe(entry) -> str:
             # !r prints the repr (with quotes), making the rationale stand out.
             lines.append(f"      override by {entry.actor}: {p['rationale']!r}")
         return "\n".join(lines)
-    # --- An override the gate would not accept -----------------------------
-    if entry.event == "OVERRIDE_REFUSED":
-        lines = [f"{p['decision']}: override by {entry.actor} refused "
-                 f"({p['rationale']!r})"]
+    # --- An override or Emergency Justification the gate would not accept ---
+    if entry.event in ("OVERRIDE_REFUSED", "EMERGENCY_REFUSED"):
+        what = "override" if entry.event == "OVERRIDE_REFUSED" else "emergency justification"
+        # dict.get: an EMERGENCY_REFUSED entry has no "rationale" key.
+        lines = [f"{p['decision']}: {what} by {entry.actor} refused "
+                 f"({p.get('rationale', '')!r})"]
         lines += [f"      - {r}" for r in p["reasons"]]
         return "\n".join(lines)
     # --- A request refused before any gate was evaluated --------------------
     if entry.event == "EXECUTION_REFUSED":
         return f"{p['decision']}: {p['reason']}"
+    # --- An Emergency Justification, element by element ---------------------
+    if entry.event == "EMERGENCY_JUSTIFICATION":
+        lines = [f"{p['decision']}: {p['emergency']} given by {entry.actor} "
+                 f"(accepted by {p['accepted_by']}, on scene: {p['on_scene']})"]
+        lines += [f"      1 consequence: {p['consequence']}",
+                  f"      2 time: {p['time_estimate']}",
+                  f"      3 options: {p['options_considered']}",
+                  f"      4 best evidence: {p['best_evidence']}",
+                  f"      suspends {p['holding_reviews']} (not resolved)"]
+        return "\n".join(lines)
     # --- Irreversible execution that went ahead with loops still open -------
     if entry.event == "OPEN_LOOP_IRREVERSIBLE_EXECUTION":
-        return f"{p['decision']}: locked {p['locked']}, still open {p['still_open']}"
+        return (f"{p['decision']}: latched into executed_open {p['latched']}"
+                + (f", annotated in their external exits {p['annotated']}"
+                   if p.get("annotated") else "")
+                + (f" under {p['emergency']}" if p.get("emergency") else ""))
+    # --- The principal risk claim's evidence, attested from outside ---------
+    if entry.event == "RISK_EVIDENCE_ATTESTED":
+        return f"{p['decision']}: risk evidence attested by {entry.actor}"
     # --- Anything else: show the raw payload, truncated ---------------------
     return json.dumps(p)[:120]
 

@@ -7,7 +7,7 @@
 #
 # Usage:   bash verification/run.sh          (from the repository root)
 # Needs:   Java 17+, curl, Python with the repo's requirements installed.
-# Time:    about 2 hours, almost all of it the four TLC runs.
+# Time:    about 2 hours, almost all of it the five TLC runs.
 # ===========================================================================
 set -euo pipefail
 
@@ -37,6 +37,8 @@ export TLA2TOOLS_JAR="$TOOLS/tla2tools.jar" ALLOY_JAR="$TOOLS/alloy.jar"
 # CommitmentStateMachine.cfg: the signal lifecycle (two signals, MaxLog 8).
 # Classes.cfg: execution class assignment (one signal, MaxLog 7).
 # Chain.cfg: Closure Chain deep enough for a reopen to weaken (MaxLog 12).
+# Emergency.cfg: off-envelope and containment reviews, and the Emergency
+#   Justification that may suspend them (two signals, MaxLog 10).
 echo "== TLC: CommitmentStateMachine, lifecycle configuration (MaxLog = 8)"
 ( cd "$HERE/tla" && java -XX:+UseParallelGC -jar "$TLA2TOOLS_JAR" -workers auto \
     -config CommitmentStateMachine.cfg -metadir "$TOOLS/tlc-states" \
@@ -48,6 +50,10 @@ echo "== TLC: CommitmentStateMachine, Closure Chain configuration (MaxLog = 12)"
 echo "== TLC: CommitmentStateMachine, execution-class configuration (MaxLog = 7)"
 ( cd "$HERE/tla" && java -XX:+UseParallelGC -jar "$TLA2TOOLS_JAR" -workers auto \
     -config Classes.cfg -metadir "$TOOLS/tlc-states-classes" \
+    CommitmentStateMachine.tla | grep -E "states generated|No error|violated|Error" )
+echo "== TLC: CommitmentStateMachine, Emergency Justification configuration (MaxLog = 10)"
+( cd "$HERE/tla" && java -XX:+UseParallelGC -jar "$TLA2TOOLS_JAR" -workers auto \
+    -config Emergency.cfg -metadir "$TOOLS/tlc-states-emergency" \
     CommitmentStateMachine.tla | grep -E "states generated|No error|violated|Error" )
 # Federation.cfg: three nodes, B may fork and lie, B's evidence rests on C.
 echo "== TLC: FederatedClosure (histories of 3 events, A's log of 6)"

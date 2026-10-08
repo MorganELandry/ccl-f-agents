@@ -30,7 +30,9 @@ THE PLAYBILL
     Scene 1   test_novel_ees_evidence_gives_evidence_closure
     Scene 2   test_non_ees_kinds_never_qualify              (parametrized, 3 runs)
     Scene 3   test_evidence_from_evaluated_process_does_not_qualify
-    Scene 4   test_evidence_from_registrant_does_not_qualify
+    Scene 4   test_evidence_from_closer_does_not_qualify
+    Scene 4b  test_evidence_from_registrant_qualifies_for_another_closer
+    Scene 4c  test_registrant_closing_on_own_evidence_does_not_qualify
     Scene 5   test_evidence_present_at_registration_is_not_novel
     Scene 6   test_evidence_existing_before_registration_is_not_novel
     Scene 7   test_one_qualifying_item_among_many_is_enough
@@ -183,22 +185,62 @@ def test_evidence_from_evaluated_process_does_not_qualify(sv):
 
 
 # ===========================================================================
-# SCENE 4 — NOR MAY THE REGISTRANT
-# Proves: evidence produced by the signal's own registrant is not causally
-# independent of "the reasoning process that produced the signal" (Layer 2,
-# External Evidence Source (EES)).
+# SCENE 4 — NOR MAY THE CLOSER
+# Proves: evidence produced by the closing agent is not an External
+# Evidence Source for their own closure: the producer is not "the agent
+# making the claim it is offered for (the closing agent, for a closure)"
+# (Layer 2, External Evidence Source (EES)).
 # ===========================================================================
 
-def test_evidence_from_registrant_does_not_qualify(sv):
+def test_evidence_from_closer_does_not_qualify(sv):
     """
-    Evidence produced by the registrant does not qualify as EES.
+    Evidence produced by the closing agent does not qualify as EES.
 
     Enter:   sv   fixture
     Exit:    passes if the closure is AUTHORITY
     """
     to_review(sv, "c", by="engineer")
+    add_ees(sv, "e1", ["c"], produced_by="manager")
+    assert sv.attempt_closure("c", "manager", CUST, ["e1"]).closure_type \
+        == ClosureType.AUTHORITY
+
+
+# ===========================================================================
+# SCENE 4b — THE REGISTRANT'S MEASUREMENT, SOMEONE ELSE'S CLOSURE
+# Proves: the registrant is no longer excluded as such. A measurement the
+# registrant produced can be the EES for another agent's closure, since
+# the claimant is the closer.
+# ===========================================================================
+
+def test_evidence_from_registrant_qualifies_for_another_closer(sv):
+    """
+    Setting the stage: "engineer" registers c and produces a measurement.
+    The action: "manager" closes c citing it. The verdict: evidence closure.
+
+    Enter:   sv   fixture
+    Exit:    passes if the closure is EVIDENCE
+    """
+    to_review(sv, "c", by="engineer")
     add_ees(sv, "e1", ["c"], produced_by="engineer")
     assert sv.attempt_closure("c", "manager", CUST, ["e1"]).closure_type \
+        == ClosureType.EVIDENCE
+
+
+# ===========================================================================
+# SCENE 4c — THE REGISTRANT CLOSING ON THEIR OWN MEASUREMENT
+# Proves: the registrant closing their own signal on evidence they produced
+# is still not an evidence closure: they are the claimant.
+# ===========================================================================
+
+def test_registrant_closing_on_own_evidence_does_not_qualify(sv):
+    """
+    Enter:   sv   fixture
+    Exit:    passes if the closure is AUTHORITY (same referent, nothing that
+             qualifies)
+    """
+    to_review(sv, "c", by="engineer")
+    add_ees(sv, "e1", ["c"], produced_by="engineer")
+    assert sv.attempt_closure("c", "engineer", TECH, ["e1"]).closure_type \
         == ClosureType.AUTHORITY
 
 

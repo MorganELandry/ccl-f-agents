@@ -24,18 +24,30 @@ THE PLAYBILL (what happens in this file)
                 CLOSED_STATES         the three closed commitment states
       Scene 4   ExitType              the fourteen loop exit types
                 EXIT_LEAVES_LOOP_OPEN exits after which the loop is still open
-                RESOLVING_EXITS       exits that meet the irreversible gate
+                CLOSING_EXITS         exits that close a loop of the other types
+                EXTERNAL_EXITS        exits that continue in an external process
       Scene 5   LegalSubtype          the four legal-exit sub-types
       Scene 6   ClosureType           the four closure types
       Scene 7   EvidenceKind          what process produced a piece of evidence
                 EES_ELIGIBLE_KINDS    kinds that can be External Evidence Sources
       Scene 8   Referent              technical reality vs. customer (Rule 5.3)
       Scene 9   ExecutionClass        irreversible / elevated / routine
-      Scene 10  EscalationCondition   the ten automatic escalation conditions
+      Scene 10  EscalationCondition   the ten automatic escalation conditions,
+                                      plus the emergency post-event review
+      Scene 11  AgentKind             person / unit / role / automation /
+                                      instrument (Agent Admissibility)
+                OBLIGATION_KINDS      kinds that can have obligation capacity
+      Scene 12  EmergencyConsequence  the consequences an Emergency
+                                      Justification may name
     ACT II — THE RECORDS (dataclasses that hold facts)
       Scene 1   Evidence              one item of evidence (frozen)
       Scene 2   ClosureRecord         one typed closure event (frozen)
       Scene 3   ExitRecord            one registered loop exit (frozen)
+      Scene 3b  ClassificationRecord  one classification and its basis (frozen)
+      Scene 3c  OutcomeRecord         one scored signal outcome (frozen)
+      Scene 3d  OpenLoopAuthorization who carried a loop open (frozen)
+      Scene 3e  EmergencyJustification  the five elements (frozen)
+      Scene 3f  RiskAttestation       the risk evidence, attested (frozen)
       Scene 4   Signal                a coordination signal and its history
       Scene 5   Decision              an execution-class decision node
       Scene 6   Architecture          the registered Layer 0 architecture
@@ -97,7 +109,7 @@ from typing import Optional
 # ===========================================================================
 # DRAMATIS PERSONAE (every module-level variable, declared here at the top)
 # ---------------------------------------------------------------------------
-# This file has four module-level variables, and none of them can be
+# This file has six module-level variables, and none of them can be
 # hoisted up here: each is built from members of an Enum class that is
 # defined further down the file, and Python runs a module top to bottom, so
 # the class must exist before the constant can be made. Each one stays
@@ -105,8 +117,10 @@ from typing import Optional
 #
 #   CLOSED_STATES          (after CommitmentState)  the three closed states
 #   EXIT_LEAVES_LOOP_OPEN  (after ExitType)         exits that leave a loop open
-#   RESOLVING_EXITS        (after ExitType)         exits that resolve a loop
+#   CLOSING_EXITS          (after ExitType)         exits that close an other-type loop
+#   EXTERNAL_EXITS         (after ExitType)         exits to an external process
 #   EES_ELIGIBLE_KINDS     (after EvidenceKind)     evidence kinds that can be EES
+#   OBLIGATION_KINDS       (after AgentKind)        kinds with obligation capacity
 # ===========================================================================
 
 
@@ -169,10 +183,19 @@ class CommitmentState(str, Enum):
     Machine). Exited signals carry their ExitType separately.
 
     The legal moves between these states live in statemachine.py
-    (TRANSITIONS). Two states deserve a note:
+    (TRANSITIONS). Three states deserve a note:
       TRAJECTORY_LOCK  terminal and distinct from closure; it is how the spec
                        represents lock-in closure ("the machine deliberately
                        refuses to represent [it] as any form of closed").
+                       The runtime no longer produces it at an override
+                       (see EXECUTED_OPEN); the state and its transition
+                       stay in the machine for analyses that find lock-in.
+      EXECUTED_OPEN    terminal and distinct from closure: the POST-EXECUTION
+                       LATCH. "When an irreversible decision executes under
+                       an open-loop authorization, every loop it depends on
+                       that the gate did not count as resolved moves to
+                       `executed_open`, carrying the authorization record"
+                       (Layer 4, Commitment State Machine).
       EXITED           one state for all fourteen exit types; which type it
                        was is kept in the signal's ExitRecord, not here.
     """
@@ -186,6 +209,7 @@ class CommitmentState(str, Enum):
     SUPPRESSED = "suppressed"
     ESCALATED = "escalated"
     TRAJECTORY_LOCK = "trajectory_lock"
+    EXECUTED_OPEN = "executed_open"
     EXITED = "exited"
 
 
@@ -239,7 +263,9 @@ class ExitType(str, Enum):
 #   open. Read by Signal.is_open below, so an exited-but-unresolved loop
 #   still counts as open wherever is_open is asked (for example the
 #   supervisor's coherence score). The irreversible gate itself asks a
-#   different question and uses RESOLVING_EXITS instead.
+#   different question and uses CLOSING_EXITS (a supersession, for the other
+#   loop types) and a supersession with an External Evidence Source (for
+#   constraint and anomaly loops) instead.
 #   Cannot move to DRAMATIS PERSONAE: it is built from ExitType members,
 #   and that class is only defined just above.
 # Exit types whose "Loop State After" in the v0.2 Loop Exit Taxonomy is open
@@ -251,14 +277,29 @@ EXIT_LEAVES_LOOP_OPEN = frozenset({
     ExitType.KEY_PERSON,
 })
 
-# RESOLVING_EXITS — exit types after which a constraint or anomaly loop
-#   counts as resolved at the irreversible gate: the two whose Loop State
-#   After is closed ("Closed by exit — permanently"; "Void — closed by
-#   circumstance"). Every other exit leaves the gate requirement unmet,
-#   including timeout, whistleblower and legal exits (Layer 4, Execution
-#   Gates, "Constraint and anomaly loops evidence-closed").
+# CLOSING_EXITS — exit types after which a loop of the OTHER types
+#   (uncertainty, dissent, classification, framing) counts as not open at
+#   the irreversible gate. Since the October 2026 cold read, only a
+#   supersession: "none remains open: each is closed, by whatever closure
+#   type, or has exited as superseded. A loop exited as terminal counts as
+#   open for this test, since the exit records the loop's open state rather
+#   than resolving it" (Layer 4, Execution Gates). Reversibility Logic says
+#   the same: "Of the exits, only a supersession resolves a loop: for a
+#   constraint or anomaly loop, one shown by an External Evidence Source"
+#   (that stricter test is Supervisor._loop_resolved). TERMINAL and TIMEOUT
+#   are therefore not in this set.
 #   Cannot move to DRAMATIS PERSONAE: built from ExitType members.
-RESOLVING_EXITS = frozenset({ExitType.TERMINAL, ExitType.SUPERSEDED})
+CLOSING_EXITS = frozenset({ExitType.SUPERSEDED})
+
+# EXTERNAL_EXITS — exits to a process outside this automaton: a
+#   whistleblower exit continues in an external jurisdiction, a legal exit
+#   under the external authority. Spec (Layer 4, Commitment State Machine,
+#   the executed_open paragraph): "A loop exited to an external process
+#   (whistleblower, legal) keeps that exit state, because it continues
+#   elsewhere, and carries the authorization record as an annotation." The
+#   latch (Supervisor._latch) annotates such loops instead of moving them.
+#   Cannot move to DRAMATIS PERSONAE: built from ExitType members.
+EXTERNAL_EXITS = frozenset({ExitType.WHISTLEBLOWER, ExitType.LEGAL})
 
 
 # ===========================================================================
@@ -318,7 +359,9 @@ class EvidenceKind(str, Enum):
     symbolic verification, primary source documents, direct measurement,
     evaluation by an independent party). A qualifying kind is necessary but
     not sufficient: the supervisor also checks that the evidence was not
-    produced by the process under evaluation or by the signal's registrant.
+    produced by the agent making the claim it is offered for, by the agent
+    accepting the decision it supports, or by a process the claim evaluates
+    (Supervisor.is_ees).
     """
     PRIMARY_DOCUMENT = "primary_document"
     DIRECT_MEASUREMENT = "direct_measurement"
@@ -372,11 +415,14 @@ class ExecutionClass(str, Enum):
     Execution classes for gating (Layer 4, Execution Gates).
 
       IRREVERSIBLE  constraint and anomaly loops evidence-closed; minimum
-                    evidence closure ratio met for the other loops; at least
-                    one External Evidence Source; classification stabilized;
-                    recurrence groups reviewed
+                    evidence closure ratio met for the other loops, none
+                    left open; at least one External Evidence Source for the
+                    principal risk claim; classification stabilized;
+                    recurrence groups reviewed; coherence at or above
+                    threshold
       ELEVATED      classification acknowledged; open loops documented
-      ROUTINE       signal registration complete
+      ROUTINE       signal registration complete; Architecture
+                    Precondition met
 
     A decision's declared class is not always the class its gate applies:
     per Execution Class Assignment, "Every execution-class decision is
@@ -395,7 +441,8 @@ class ExecutionClass(str, Enum):
 
 class EscalationCondition(str, Enum):
     """
-    The ten automatic escalation conditions (Layer 2).
+    The ten automatic escalation conditions (Layer 2), plus the mandatory
+    post-event review of an Emergency Justification.
 
     One member per bullet of the Escalation Conditions list, in the spec's
     order: recurrence threshold (Rule 7); off-envelope or containment
@@ -405,6 +452,17 @@ class EscalationCondition(str, Enum):
     credibility discounting; repeated sender discount (AP-G); and an
     execution class lowered after a blocked request (Layer 4, Execution
     Class Assignment; added October 2026).
+
+    EMERGENCY_POST_EVENT is not in the spec's list: it is the review the
+    Overrides text makes mandatory after an Emergency Justification ("a
+    mandatory post-event review records whether every element held").
+    IMPLEMENTATION DECISION: it is modelled as a structural review so it
+    sits in the same record, with the same resolver independence, as the
+    others. It is opened over an executed decision, so it holds nothing.
+
+    One spec bullet, "off-envelope or containment", is one member here,
+    but the two triggers are resolved differently. The review records
+    which one fired in StructuralReview.trigger (supervisor.py).
     """
     RECURRENCE_THRESHOLD = "recurrence_threshold"
     OFF_ENVELOPE_OR_CONTAINMENT = "off_envelope_or_containment"
@@ -416,6 +474,73 @@ class EscalationCondition(str, Enum):
     CREDIBILITY_DISCOUNTING = "credibility_discounting"
     SENDER_DISCOUNT_RECURRENCE = "sender_discount_recurrence"
     EXECUTION_CLASS_DOWNGRADE_AFTER_BLOCK = "execution_class_downgrade_after_block"
+    EMERGENCY_POST_EVENT = "emergency_post_event"
+
+
+# ===========================================================================
+# ACT I, SCENE 11 — WHO OR WHAT IS ACTING?
+# Which kind of agent is this, and can it hold an obligation?
+# ===========================================================================
+
+class AgentKind(str, Enum):
+    """
+    The kind of an agent, for Agent Admissibility (Layer 0).
+
+      PERSON       a human being
+      UNIT         an organizational unit
+      ROLE         a role, held by successive occupants
+      AUTOMATION   automated software: a monitor, a model at a version
+      INSTRUMENT   a measuring instrument
+
+    Spec (Layer 0, Agent Admissibility): "Persons and organizational units
+    have obligation capacity. A role has it when a successor is registered
+    under AP.1b, so that the obligation survives a change of occupant."
+    Instruments, models and monitors have identity persistence but "cannot
+    accept an obligation". Supervisor.obligation_capable() applies this;
+    an agent never registered with a kind is treated as obligation-capable,
+    so registries written before this enum keep working.
+    """
+    PERSON = "person"
+    UNIT = "unit"
+    ROLE = "role"
+    AUTOMATION = "automation"
+    INSTRUMENT = "instrument"
+
+
+# OBLIGATION_KINDS — the agent kinds that can have obligation capacity.
+#   PERSON and UNIT always have it; ROLE only with a registered successor
+#   (see AgentKind). AUTOMATION and INSTRUMENT never do.
+#   Cannot move to DRAMATIS PERSONAE: built from AgentKind members.
+OBLIGATION_KINDS = frozenset({AgentKind.PERSON, AgentKind.UNIT, AgentKind.ROLE})
+
+
+# ===========================================================================
+# ACT I, SCENE 12 — HOW BAD WOULD WAITING BE?
+# Which consequences can ground an Emergency Justification?
+# ===========================================================================
+
+class EmergencyConsequence(str, Enum):
+    """
+    Element 1 of an Emergency Justification (Layer 4, Execution Gates,
+    Overrides): the consequence the hold would otherwise impose.
+
+      LIFE_SAFETY_CATASTROPHIC       death or permanent total disability
+                                     before the review could complete:
+                                     MIL-STD-882E Severity Category 1, "by
+                                     its life-safety criteria only"
+      CVSS_CRITICAL_SAFETY_FUNCTION  for software and cyber-physical
+                                     systems: an actively exploited
+                                     weakness rated Critical (CVSS 9.0 to
+                                     10.0) in a safety-critical function
+                                     as MIL-STD-882E defines one
+
+    There is deliberately no member for schedule, cost, contract,
+    reputation, or the standard's monetary and environmental criteria:
+    "Schedule, cost, contract, and reputation never qualify." A
+    justification naming any other consequence cannot be built.
+    """
+    LIFE_SAFETY_CATASTROPHIC = "life_safety_catastrophic"
+    CVSS_CRITICAL_SAFETY_FUNCTION = "cvss_critical_safety_function"
 
 
 # ---------------------------------------------------------------------------
@@ -446,11 +571,16 @@ class Evidence:
       at            supervisor clock tick when it was added (Evidence Novelty)
       depends_on    ids of the signals (coordination loops) this evidence
                     depends on: its upstream loops (Layer 2, Closure Chain).
-                    An evidence closure can rest on this item only if every
-                    upstream loop is itself closed by a chain-sound
-                    evidence closure, all the way up.
+                    An evidence closure that cites this item is chain-sound
+                    only if every upstream loop is itself resolved: closed
+                    by a chain-sound evidence closure, or exited as
+                    superseded with an External Evidence Source, all the
+                    way up.
 
-    Frozen: once recorded, evidence cannot be edited.
+    Frozen: once recorded, evidence cannot be edited in place. A dependency
+    discovered later is added by Supervisor.add_dependency(), which stores
+    a new copy of the record with the longer depends_on and logs it (as
+    LATE_DEPENDENCY if a closure already cites the item).
     """
     evidence_id: str
     content: str
@@ -533,6 +663,14 @@ class ExitRecord:
                         what the loop is waiting for: "the loop re-enters
                         review when that condition is met"; without one it
                         has no re-entry path (Layer 2, Exit obligations)
+      evidence_ids      evidence cited with the exit. For a superseded exit
+                        it can show "that the context that generated it no
+                        longer exists": with an External Evidence Source
+                        among it, a superseded constraint or anomaly loop is
+                        resolved at the irreversible gate and in the Closure
+                        Chain (Layer 4, Execution Gates; Layer 2, Closure
+                        Chain). Any exit may carry evidence; only that one
+                        use reads it.
     """
     signal_id: str
     exit_type: ExitType
@@ -545,6 +683,185 @@ class ExitRecord:
     suppression_ref: Optional[str] = None
     legal_subtype: Optional[LegalSubtype] = None
     resolution_condition: Optional[str] = None
+    evidence_ids: tuple[str, ...] = ()
+
+
+# ===========================================================================
+# ACT II, SCENE 3b — THE CLASSIFICATION ON RECORD
+# ClassificationRecord: one operational-state classification, with its basis
+# ===========================================================================
+
+@dataclass(frozen=True)
+class ClassificationRecord:
+    """
+    One classification of a signal's operational state (Rule 2).
+
+    Fields:
+      at            supervisor clock tick
+      state         the OperationalState actually applied (a refused
+                    nominal is recorded as elevated uncertainty)
+      by            the classifying agent: the claimant for the EES test
+                    on its evidence ("the registering or reclassifying
+                    agent, for a reversal path or a classification")
+      evidence_ids  evidence cited for it
+      proposed      the state that was asked for (differs from `state`
+                    only when a nominal was refused)
+
+    The gate reads the latest record of a nominal signal to check that its
+    classification cites an External Evidence Source (Layer 4, Execution
+    Gates, "Classification acknowledged").
+    """
+    at: int
+    state: OperationalState
+    by: str
+    evidence_ids: tuple[str, ...]
+    proposed: OperationalState
+
+
+# ===========================================================================
+# ACT II, SCENE 3c — THE OUTCOME ON RECORD
+# OutcomeRecord: one scored outcome of an agent's signal (AP.7)
+# ===========================================================================
+
+@dataclass(frozen=True)
+class OutcomeRecord:
+    """
+    Whether one of an agent's signals proved correct, and who said so.
+
+    Fields:
+      agent         whose signal it was
+      correct       True if the signal's technical claim was confirmed
+      scored_by     the agent who scored it
+      evidence_ids  evidence cited for the score
+      signal_id     the signal, if known
+      at            supervisor clock tick
+
+    Spec (Layer 4, Execution Gates, "Stable or improving accuracy rate"):
+    "An outcome counts only if it was scored by a party that meets the
+    External Evidence Source test with respect to the discounting agent:
+    the agent whose discount is being judged cannot score the record that
+    judges it." Supervisor._counted_outcomes applies that.
+    """
+    agent: str
+    correct: bool
+    scored_by: str
+    evidence_ids: tuple[str, ...]
+    signal_id: Optional[str]
+    at: int
+
+
+# ===========================================================================
+# ACT II, SCENE 3d — THE OPEN LOOP, SIGNED FOR
+# OpenLoopAuthorization: who carried a loop open through execution
+# ===========================================================================
+
+@dataclass(frozen=True)
+class OpenLoopAuthorization:
+    """
+    The authorization record a latched loop carries into `executed_open`.
+
+    Fields:
+      decision_id   the irreversible decision that executed
+      authorized_by the overrider, or the agent who gave the Emergency
+                    Justification; now the loop's steward
+      rationale     their stated rationale
+      at            supervisor clock tick
+      emergency_id  "EJ<n>" if the authorization was an Emergency
+                    Justification, else None
+      prior_state   the commitment state the loop was latched from (the
+                    latch "does not erase a closure by authority or role
+                    switch, which stays in the loop's history")
+
+    Spec (Layer 4, Commitment State Machine): the loop moves to
+    `executed_open`, "carrying the authorization record: who authorized,
+    as steward of those loops, and on what rationale".
+    """
+    decision_id: str
+    authorized_by: str
+    rationale: str
+    at: int
+    emergency_id: Optional[str] = None
+    prior_state: str = ""
+
+
+# ===========================================================================
+# ACT II, SCENE 3e — THE EMERGENCY, ARGUED ELEMENT BY ELEMENT
+# EmergencyJustification: the five documented elements
+# ===========================================================================
+
+@dataclass(frozen=True)
+class EmergencyJustification:
+    """
+    An Emergency Justification (Layer 4, Execution Gates, Overrides): the
+    only way an irreversible decision held by off-envelope or containment
+    reviews (or by an earlier justification's post-event review) may
+    proceed before they are resolved.
+
+    Fields (one per documented element; the agent giving it is the agent
+    who calls request_execution):
+      consequence         element 1: an EmergencyConsequence
+      time_estimate       element 2: "A documented estimate shows the harm
+                          would arrive before the review could be resolved"
+      options_considered  element 3: "The intermediate options Rule 6
+                          requires have been generated, and each is
+                          documented as unavailable or worse" (non-empty)
+      best_evidence       element 4: ids of "the best engineering evidence
+                          available, recorded with it" (at least one; any
+                          kind; each must be on record)
+      on_scene            element 5: True when "the harm would arrive before
+                          any second agent could be consulted" and the agent
+                          on scene acts alone
+      rationale           the stated rationale, recorded with each loop the
+                          justification carries open
+
+    Element 4's other half (an off-envelope condition classified
+    experimental, "or containment, if it has since become one"; a
+    containment condition kept in containment) is checked against the
+    signals, not stated here. Under the on-scene proviso the record still
+    carries every field: the contemporaneous record "stands in for the
+    documentation of every element", and this record is how the runtime
+    keeps it. The supervisor checks every element before execution and
+    never reads an outcome: "The justification is judged by its elements,
+    never by its outcome."
+    """
+    consequence: EmergencyConsequence
+    time_estimate: str
+    options_considered: tuple[str, ...]
+    best_evidence: tuple[str, ...]
+    on_scene: bool
+    rationale: str = ""
+
+
+# ===========================================================================
+# ACT II, SCENE 3f — A SECOND PAIR OF EYES ON THE RISK CLAIM
+# RiskAttestation: the evidence bears on the claim, says someone else
+# ===========================================================================
+
+@dataclass(frozen=True)
+class RiskAttestation:
+    """
+    An independent attestation that the evidence cited in a Rule 4
+    acceptance bears on its principal risk claim.
+
+    Fields:
+      by            the attesting agent
+      rationale     why the evidence bears on the claim
+      at            supervisor clock tick
+      acceptor      the acceptance it was given for (the acceptor then)
+      evidence_ids  the acceptance evidence it was given for
+
+    Spec (Layer 4, Execution Gates, "At least one External Evidence Source
+    for the principal risk claim"): "Whether the cited evidence bears on
+    the claim is attested by an agent other than the acceptor who meets the
+    independence conditions under Overrides, and the attestation stays in
+    the record." Supervisor.attest_risk_evidence() records it; the gate
+    re-checks the attester's independence when it runs.
+    """
+    by: str
+    rationale: str
+    at: int
+    acceptor: str
+    evidence_ids: tuple[str, ...]
 
 
 # ===========================================================================
@@ -577,8 +894,23 @@ class Signal:
       operational_state         its OperationalState once classified
       registered_at             clock tick of registration (-1 = not yet)
       review_opened_at          clock tick review last opened (-1 = never)
+      first_review_opened_at    clock tick review FIRST opened (-1 = never);
+                                classification stability is judged from
+                                here, so "closing and reopening a loop does
+                                not restart it"
       classification_history    (tick, state) pairs; used to judge whether
                                 classification was stable (Rule 3)
+      classification_records    one ClassificationRecord per classification,
+                                with who classified and the evidence cited
+      open_loop_authorizations  every OpenLoopAuthorization that carried
+                                this loop through an irreversible execution
+                                (for a loop in an external exit, an
+                                annotation: the loop keeps its exit state)
+      resolving_reclassifications  clock ticks of reclassifications that
+                                resolved an off-envelope review under its
+                                trigger's standard; they do not destabilize
+                                the classification (Layer 4, Execution
+                                Gates, "Classification stabilized")
       evidence_ids              evidence linked to this signal
       evidence_at_registration  evidence already present at registration;
                                 such evidence fails Evidence Novelty
@@ -617,6 +949,10 @@ class Signal:
     exit: Optional[ExitRecord] = None
     suppression_events: list[int] = field(default_factory=list)
     reopen_count: int = 0
+    first_review_opened_at: int = -1
+    classification_records: list[ClassificationRecord] = field(default_factory=list)
+    open_loop_authorizations: list[OpenLoopAuthorization] = field(default_factory=list)
+    resolving_reclassifications: list[int] = field(default_factory=list)
 
     # -----------------------------------------------------------------------
     # ACT II, SCENE 4a — IS THE LOOP STILL OPEN?
@@ -625,23 +961,27 @@ class Signal:
     def is_open(self) -> bool:
         """
         Open = registered and not resolved: not closed, not latched in
-        trajectory lock, and not exited by an exit type that ends the loop.
-        Exits that leave the loop open (EXIT_LEAVES_LOOP_OPEN) still count.
+        trajectory lock or executed_open, and not exited by an exit type
+        that ends the loop. Exits that leave the loop open
+        (EXIT_LEAVES_LOOP_OPEN) still count.
 
         Enter:   (none; read as `sig.is_open`, no parentheses)
         Exit:    True if the loop is open, else False
 
-        Trajectory lock is not open: per Layer 4 it is a terminal marker that
-        the loop "remained open at the point irreversible execution
-        proceeded" — callers that need it (for example the supervisor's
-        coherence score) count it separately.
+        The two latched states are not open: per Layer 4 each is a terminal
+        marker of a loop carried open through irreversible execution ("After
+        execution, then, no loop the decision depends on stands open, as if
+        awaiting a review that can no longer change the outcome"). Callers
+        that need them (for example the supervisor's coherence score) count
+        them separately.
         """
         # --- Exited: open only if the exit type leaves the loop open -------
         if self.state == CommitmentState.EXITED:
             return self.exit is not None and self.exit.exit_type in EXIT_LEAVES_LOOP_OPEN
-        # --- Otherwise: open unless closed, locked, or never registered ----
+        # --- Otherwise: open unless closed, latched, or never registered ---
         return (self.state not in CLOSED_STATES
                 and self.state not in (CommitmentState.TRAJECTORY_LOCK,
+                                       CommitmentState.EXECUTED_OPEN,
                                        CommitmentState.UNREGISTERED))
 
     # -----------------------------------------------------------------------
@@ -781,8 +1121,27 @@ class Decision:
       acceptance_rationale   their documented rationale ("" until accepted)
       executed               True once the gate has let it execute
       acceptance_evidence    ids of evidence cited in the Rule 4 acceptance;
-                             it can supply the decision's External Evidence
-                             Source (Layer 4, Execution Gates)
+                             the only place the irreversible gate looks for
+                             the External Evidence Source for the principal
+                             risk claim (Layer 4, Execution Gates)
+      risk_claim             the principal risk claim named in the Rule 4
+                             acceptance: "what must be true for the decision
+                             to be safe to execute" ("" until named)
+      acceptors              every agent who has ever accepted the decision,
+                             in order (a re-acceptance never erases an
+                             earlier acceptor: none of them may override,
+                             give an off-scene Emergency Justification, or
+                             resolve or attest for it)
+      risk_attestation       the RiskAttestation that the acceptance's cited
+                             evidence bears on the principal risk claim, or
+                             None; a new acceptance (which may change the
+                             evidence) voids it
+      rule3_known, rule3_assumed, rule3_uncertain
+                             the Rule 3 registration recorded with the
+                             acceptance: "what is known, what is assumed,
+                             and what remains genuinely uncertain" ("" until
+                             recorded). The irreversible gate's
+                             "classification stabilized" needs all three.
       class_setters          every agent who registered or reclassified the
                              decision; their evidence cannot show its
                              reversal path was tested
@@ -820,6 +1179,12 @@ class Decision:
     scope: str = ""
     acceptance_grant: Optional[str] = None
     requesters: set = field(default_factory=set)
+    risk_claim: str = ""
+    acceptors: tuple[str, ...] = ()
+    risk_attestation: Optional[RiskAttestation] = None
+    rule3_known: str = ""
+    rule3_assumed: str = ""
+    rule3_uncertain: str = ""
 
 
 # ===========================================================================

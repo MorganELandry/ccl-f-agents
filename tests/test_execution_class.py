@@ -40,7 +40,8 @@ THE PLAYBILL
     Scenes 23-24  no exemption for constraint or anomaly loops
     Scenes 25-32  reclassification: rationale, logging, raising, lowering
     Scenes 33-38  lowering after a blocked request escalates (Scene 33 also
-                  holds the helper blocked_then_lowered())
+                  holds the helper blocked_then_lowered()); 37b-37c: on a
+                  linked decision, and registering under a new identifier
     Scene 39      Rule 4 acceptance still required; unknown evidence ids
                   (two tests)
 
@@ -113,9 +114,10 @@ LOWER_CLASSES = [ROUT, ELEV]
 #   irreversible gate was applied.
 CONSTRAINT_MSG = "constraint/anomaly loops not evidence-closed"
 
-# EES_MSG — the irreversible-gate failure when the decision's support holds
-#   no External Evidence Source.
-EES_MSG = "no External Evidence Source in the decision's support"
+# RISK_MSG — the irreversible-gate failure when the Rule 4 acceptance names
+#   no principal risk claim (and so cites no External Evidence Source for
+#   one). register() below accepts with the rationale only, so it shows.
+RISK_MSG = "no principal risk claim named in the Rule 4 acceptance"
 
 # REVIEW_MSG — prefix of the failure while a downgrade-after-block review is
 #   unresolved (from the API notes).
@@ -321,7 +323,7 @@ def test_lower_class_without_reversal_path_is_gated_as_irreversible(declared):
     result = sv.request_execution("d1", DIRECTOR)
     assert not result.permitted
     assert len(failures_with(result, CONSTRAINT_MSG)) == 1
-    assert failures_with(result, EES_MSG) == [EES_MSG]
+    assert failures_with(result, RISK_MSG) == [RISK_MSG]
     assert result.execution_class is IRR
     assert result.declared_class is declared
     assert d.execution_class is declared
@@ -1129,7 +1131,8 @@ def test_after_review_resolved_decision_executes_at_lower_class():
     assert not sv.request_execution("d1", DIRECTOR).permitted
     (rev,) = decision_reviews(sv, "d1")
     sv.resolve_review(rev.review_id, BOARD,
-                      "downgrade justified: rollback independently rehearsed")
+                      "downgrade justified: rollback independently rehearsed",
+                      elements_changed=["gate parameter: reversal-test evidence required"])
     assert rev.resolved
     result = sv.request_execution("d1", DIRECTOR)
     assert result.permitted, result.failures
@@ -1166,27 +1169,31 @@ def test_unsupported_lowering_after_block_also_escalates():
 # ===========================================================================
 # SCENE 37 — LOWERINGS THAT DO NOT ESCALATE
 # Proves: lowering with no prior blocked request, or after a block on a
-# different decision, opens no review.
+# decision that is NOT linked to it, opens no review.
 # ===========================================================================
 
 @pytest.mark.parametrize("other_blocked", [False, True], ids=["no-block",
-                                                              "other-decision-blocked"])
-def test_lowering_without_prior_block_on_same_decision_does_not_escalate(other_blocked):
+                                                              "unlinked-decision-blocked"])
+def test_lowering_without_prior_block_on_linked_decision_does_not_escalate(other_blocked):
     """
     Spec: the escalation applies to "a lowering made after an execution
-    request for the same decision was blocked".
+    request for the same decision was blocked", or after "any linked
+    decision was blocked"; "two decisions are linked when they name a
+    failure mode in common and share a signal".
 
-    Setting the stage: optionally, a different decision "d0" over the same
-    loop is blocked first. Then d1, never requested, is lowered with valid
-    support. The verdict: no review for d1, no review with the new
-    condition, and d1 executes at ROUTINE.
+    Setting the stage: optionally, a decision "d0" over a DIFFERENT loop
+    "c0" (no shared signal, so not linked) is blocked first. Then d1,
+    never requested, is lowered with valid support. The verdict: no review
+    for d1, no review with the new condition, and d1 executes at ROUTINE.
     """
     # PLAYERS IN THIS SCENE
     #   sv   the Supervisor
     sv = Supervisor()
     authority_world(sv)
     if other_blocked:
-        register(sv, IRR, decision_id="d0")
+        to_review(sv, "c0")
+        sv.register_decision("d0", "decision d0", IRR, ["c0"], REGISTRAR)
+        sv.accept_decision("d0", DIRECTOR, "accepted")
         assert not sv.request_execution("d0", DIRECTOR).permitted
     register(sv, IRR)
     reversal_evidence(sv)
@@ -1195,6 +1202,71 @@ def test_lowering_without_prior_block_on_same_decision_does_not_escalate(other_b
     assert decision_reviews(sv, "d1") == []
     assert [r for r in sv.reviews if as_value(r.condition) == DOWNGRADE_VALUE] == []
     assert sv.request_execution("d1", DIRECTOR).permitted
+
+
+# ===========================================================================
+# SCENE 37b — A LINKED DECISION WAS BLOCKED
+# Proves: "a lowering made after any linked decision was blocked escalates
+# the same way" (Execution Class Assignment).
+# ===========================================================================
+
+def test_lowering_after_a_linked_decision_was_blocked_escalates():
+    """
+    Setting the stage: d0 over loop "c1" is blocked. d1, over the same loop
+    (same signal, same failure mode: linked), is registered irreversible.
+    The action: d1 is lowered to ROUTINE with valid support. The verdict:
+    a downgrade-after-block review on d1 that names d0, and d1 cannot
+    execute at any class until it is resolved.
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv     the Supervisor
+    #   revs   reviews scoped to d1
+    sv = Supervisor()
+    authority_world(sv)
+    register(sv, IRR, decision_id="d0")
+    assert not sv.request_execution("d0", DIRECTOR).permitted
+    register(sv, IRR)
+    reversal_evidence(sv)
+    sv.reclassify_decision("d1", ROUT, REGISTRAR, "rollback rehearsed",
+                           reversal_path=PATH, reversal_evidence_ids=["rev-ev"])
+    revs = decision_reviews(sv, "d1")
+    assert len(revs) == 1 and as_value(revs[0].condition) == DOWNGRADE_VALUE
+    assert "d0" in revs[0].detail
+    assert failures_with(sv.request_execution("d1", DIRECTOR), REVIEW_MSG)
+
+
+# ===========================================================================
+# SCENE 37c — THE SAME COMMITMENT UNDER A NEW NAME
+# Proves: "registering the same commitment under a new decision identifier
+# does not avoid it" (Execution Class Assignment). IMPLEMENTATION DECISION:
+# a new decision linked to a blocked one and registered at a lower class
+# escalates at once.
+# ===========================================================================
+
+def test_registering_a_linked_decision_at_a_lower_class_escalates():
+    """
+    Setting the stage: d0 over "c1", irreversible, is blocked. The action:
+    the same commitment is registered as d1 at ROUTINE with a tested
+    reversal path. The verdict: d1 has a downgrade-after-block review and
+    is held at every class; an unlinked decision registered the same way
+    is not.
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv   the Supervisor
+    sv = Supervisor()
+    authority_world(sv)
+    register(sv, IRR, decision_id="d0")
+    assert not sv.request_execution("d0", DIRECTOR).permitted
+    reversal_evidence(sv)
+    register(sv, ROUT, path=PATH, evidence=["rev-ev"])
+    revs = decision_reviews(sv, "d1")
+    assert len(revs) == 1 and as_value(revs[0].condition) == DOWNGRADE_VALUE
+    assert failures_with(sv.request_execution("d1", DIRECTOR), REVIEW_MSG)
+    # --- An unlinked decision at the same class: no review -----------------
+    to_review(sv, "c9")
+    sv.register_decision("d9", "unrelated", ROUT, ["c9"], REGISTRAR, reversal_path=PATH,
+                         reversal_evidence_ids=["rev-ev"])
+    assert decision_reviews(sv, "d9") == []
 
 
 # ===========================================================================

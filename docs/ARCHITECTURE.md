@@ -23,7 +23,7 @@ events (plain dicts) ──► graph.py (LangGraph)  interpret ─► apply ─�
 
 | Module | Role |
 |---|---|
-| `cclf/types.py` | The vocabulary: six signal types, five operational states, the commitment states, 14 exit types, four closure types, evidence kinds, referents, execution classes, ten escalation conditions. Records: `Signal`, `Evidence`, `ClosureRecord`, `ExitRecord`, `Decision`, `Architecture`. |
+| `cclf/types.py` | The vocabulary: six signal types, five operational states, the commitment states (including the `executed_open` latch), 14 exit types, four closure types, evidence kinds, referents, execution classes, the ten escalation conditions plus the emergency post-event review, agent kinds, emergency consequences. Records: `Signal`, `Evidence`, `ClosureRecord`, `ExitRecord`, `ClassificationRecord`, `OutcomeRecord`, `OpenLoopAuthorization`, `EmergencyJustification`, `Decision`, `Architecture`. |
 | `cclf/statemachine.py` | The Layer 4 transition table, transcribed row by row, plus named reasons for blocked transitions, `exit_allowed()` and `reentry_allowed()`. |
 | `cclf/audit.py` | Append-only audit trail. Each entry holds the SHA-256 of the previous one, so editing, deleting or reordering an entry breaks `AuditTrail.verify()`. Entries cut off the end are caught only against a `head()` hash kept elsewhere. |
 | `cclf/supervisor.py` | The rule engine. Every state change goes through it, and every rule it enforces is labelled with the draft section it comes from. |
@@ -46,18 +46,24 @@ unregistered → registered → classified → under_review ─┬─► closed_
 
 closed_* → under_review          reopen: rationale required; a role-switch closure needs an independent reviewer
 suppressed → under_review        re-entry logged; the suppression stays on the record
-escalated → under_review         only after structural review documents a Rule 8 model update
+escalated → under_review         only after its structural review is resolved by what its trigger requires
 any open state → exited(type)    with that exit type's obligations
 exited → under_review            only where the exit type's re-entry rule allows
+any non-terminal state → executed_open (terminal)
+                                 the POST-EXECUTION LATCH: at an irreversible execution under an
+                                 override or Emergency Justification, every loop the gate did not
+                                 count as resolved, with the authorization record
 ```
+
+`trajectory_lock` stays in the machine (and in the TLA+ table) for analyses that find lock-in, but the runtime no longer produces it: an override now latches into `executed_open` and records no lock-in closure.
 
 Blocked, each with a named reason:
 
 - closing a signal before it is classified or before review opens;
 - closing a suppressed signal without re-entry;
 - closing an escalated signal before structural review has documented a model update;
-- any move out of a closed state except back into review;
-- any move out of `trajectory_lock`.
+- any move out of a closed state except back into review (or the latch);
+- any move out of `trajectory_lock` or `executed_open`.
 
 ## Closure typing (Layer 2, Key Definitions)
 
@@ -65,31 +71,48 @@ Blocked, each with a named reason:
 
 | Closure | When |
 |---|---|
-| **Evidence** | Some attached evidence passes **Evidence Novelty** (it was not present at registration) and the **External Evidence Source** test (its kind is a primary document, direct measurement, formal verification or independent party, and its producer is neither the process under evaluation nor the signal's registrant). Model output, assertions and internal analysis never qualify. |
+| **Evidence** | Some attached evidence passes **Evidence Novelty** (it was not present at registration) and the **External Evidence Source** test (its kind is a primary document, direct measurement, formal verification or independent party, and its producer is neither the claimant, here the closing agent, nor the process under evaluation). Model output, assertions and internal analysis never qualify. |
 | **Role switch** | The registrant closes their own signal while acting for the other referent (technical reality vs. customer, Rule 5.3) with nothing new. Reopening it needs an independent reviewer. |
 | **Authority** | Anything else that closes the signal: a decision without qualifying evidence. |
-| **Lock-in** | Recorded when an override of a failing irreversible gate latches constraint and anomaly signals under review into `trajectory_lock`. |
+| **Lock-in** | Kept in the vocabulary; the runtime no longer records it (see the latch above). |
 
-**Closure Chain.** Evidence can name the loops it depends on (`add_evidence(..., depends_on=[...])`). An evidence closure is *chain-sound* only if at least one item of its qualifying evidence has every upstream loop itself closed by a chain-sound evidence closure. Soundness is computed when needed, so reopening an upstream loop weakens every closure downstream of it, and each one that loses its standing is logged as `CHAIN_WEAKENED`. A closure that isn't chain-sound stays recorded as an evidence closure but counts as non-evidence at the gates, in the ratio and in the coherence score. Each evidence closure's audit entry records whether it was chain-sound when made (`chain_sound`) and which upstream loops were not (`broken_links`).
+**One EES definition** (Layer 2): `is_ees(ev, sig, claimant, excluded)` excludes the claimant and the processes the claim evaluates, plus anyone the caller names. The claimant is the closing agent for a closure, the classifying agent for a classification (a nominal one needs an EES), the registering or reclassifying agent for a reversal path, the exiting agent for a supersession, the accepting agent for the Rule 4 risk claim. Where a decision is being judged, its accepting agent is excluded too ("the agent accepting the decision it supports"), so the gate re-checks closures and nominal classifications with the acceptor excluded. The registrant is not excluded as such: a measurement the registrant took can carry someone else's closure.
+
+**Closure Chain.** Evidence can name the loops it depends on (`add_evidence(..., depends_on=[...])`, or later with `add_dependency()`). An evidence closure is *chain-sound* only if it has at least one qualifying item and **every** cited item has every upstream loop itself resolved: closed by a chain-sound evidence closure, or exited as superseded with an External Evidence Source, all the way up. Soundness is computed when needed, so reopening an upstream loop weakens every closure downstream of it, and each one that loses its standing is logged as `CHAIN_WEAKENED`. A dependency added to evidence a closure already cites is logged `LATE_DEPENDENCY`. A closure that isn't chain-sound stays recorded as an evidence closure but counts as non-evidence at the gates, in the ratio and in the coherence score. Each evidence closure's audit entry records whether it was chain-sound when made (`chain_sound`) and which upstream loops were not (`broken_links`).
 
 If a signal has a registered closure authority and the closer is outside it, the closure is logged as an `ATTEMPTED_CLOSURE`, and the signal stays open. Adopting a frame (`adopt_frame`) by someone within the framing signal's closure authority is an authority closure, and the signals it displaces are suppressed. From anyone else it is only an attempted closure.
 
 ## Escalation (Layer 2)
 
-The ten escalation conditions each open a `StructuralReview`. Reviews are deduplicated per condition and scope: a repeat trigger adds its signals to the open review, logs `REVIEW_JOINED`, and escalates any added signal that is under review at once. A review is resolved only with a documented Rule 8 model update, and an escalated signal returns to review only then. While unresolved, a review touching an irreversible decision holds it: no execution, override included (see [Overrides](#execution-gates-layer-4)).
+The ten escalation conditions each open a `StructuralReview`. Reviews are deduplicated per condition, scope and trigger: a repeat trigger adds its signals to the open review, logs `REVIEW_JOINED`, and escalates any added signal that is under review at once. While unresolved, a review touching an irreversible decision holds it: no execution, override included (see [Overrides](#execution-gates-layer-4)); only off-envelope and containment holds, and the post-event review of an earlier justification, can be suspended, by an Emergency Justification.
+
+**Resolution by trigger** (`resolve_review(review_id, by, model_update, elements_changed, level, finding, elements_held, no_model_change)`), and an escalated signal returns to review only then:
+
+| Trigger | Resolved by |
+|---|---|
+| off-envelope classification | every signal it names reclassified, after the review opened, to nominal or elevated uncertainty, citing an EES for the reclassifying agent (no acceptor of a decision concerned may produce it); plus a written finding. That reclassification is recorded as resolving and does not destabilize |
+| containment classification | an independent steward review: a written finding, recorded as `reviewing_steward` |
+| emergency post-event review | a written finding and `elements_held` (did every element hold?) |
+| a count (recurrence, authority closures, AP-G) or relabeling after refusal | a Rule 8 update: `model_update` and a non-empty `elements_changed`; a recurrence review also names the `level` at which the instances are generated |
+| every other condition | that Rule 8 update, or `no_model_change=True` with a written `finding`: the independent reviewer's rationale that no model element requires change |
+
+The resolver needs obligation capacity and must be independent of every decision the review concerns: not an agent who ever accepted it or a requester, and not in the reporting line of any of its acceptors. The irreversible gate re-checks this for resolved reviews touching the decision, so a resolution given before its resolver accepted (or before a reporting line was registered) counts as unresolved, and the failure says so; an independent agent may then re-resolve it (`RESOLUTION_SUPERSEDED`, the earlier resolution kept in `history`). **Effect** (Rule 8): if a recurrence group whose review was resolved gains a new member, `UPDATE_INEFFECTIVE` names that review and a new group review opens.
 
 | Condition | Trigger in this runtime |
 |---|---|
-| `recurrence_threshold` | A recurrence group reaches the threshold (D1, default 3) |
+| `recurrence_threshold` | A recurrence group reaches the threshold (D1, default 3), or recurs after its review was resolved, or a third Emergency Justification touches one failure mode (scope `emergency:<mode>`) |
 | `off_envelope_or_containment` | A signal is classified off-envelope or containment |
 | `authority_closure_count` | An irreversible decision's signals have more authority closures than the threshold (D5, default 1) |
 | `role_switch_on_constraint` | A constraint signal is closed by role switch |
-| `lock_in_with_open_constraints` | An irreversible gate is overridden while constraint or anomaly loops are open (latched into `trajectory_lock` or still failing the gate) |
+| `lock_in_with_open_constraints` | No runtime trigger since October 2026 (an override latches into `executed_open` instead); kept for analyses |
 | `suppressed_before_execution` | An irreversible request is made over a suppressed signal; the review blocks that same request |
 | `framing_adopted_over_open_constraints` | A frame is adopted while it displaces open constraint signals |
 | `credibility_discounting` | A credibility discount is not supported by the target's track record (D7) |
 | `sender_discount_recurrence` | The agent's third unsupported discount (D6); discounts earned by a declining accuracy record do not count. The agent is placed under AP-G |
-| `execution_class_downgrade_after_block` | A decision's declared class, or the class the gate would apply, is lowered after one of its execution requests was refused. Until the review is resolved the decision cannot execute at any class, even by override |
+| `execution_class_downgrade_after_block` | A decision's declared class, or the class the gate would apply, is lowered after an execution request on it, or on a linked decision (one failure mode and one signal in common), was refused; or a new linked decision is registered below a blocked one. Until the review is resolved the decision cannot execute at any class, even by override |
+| `emergency_post_event` | Opened by every Emergency Justification over the executed decision and its signals (not in the draft's list; the draft makes the review mandatory) |
+
+Thresholds: the recurrence, authority-closure and sender-discount defaults are the draft's own. `Settings` refuses (ValueError) any of the three raised above its default without `threshold_rationale`, and every Supervisor logs its settings (`SETTINGS`) when created. `Settings` is frozen, so a threshold cannot be changed afterward.
 
 ## Exits (Layer 2, Loop Exit Taxonomy)
 
@@ -101,7 +124,7 @@ All 14 exit types are supported. Their obligations are enforced, and a refused e
 - a legal exit gives one of four sub-types;
 - a containment, deferred or ambiguity exit can register a resolution condition: what the loop is waiting for.
 
-Nine exit types leave the loop open (`EXIT_LEAVES_LOOP_OPEN`). At the irreversible gate, an exited constraint or anomaly loop counts as resolved only after a terminal or superseded exit (`RESOLVING_EXITS`); any other exit, including timeout, whistleblower and legal, still blocks it. Re-entry follows the taxonomy:
+Nine exit types leave the loop open (`EXIT_LEAVES_LOOP_OPEN`). At the irreversible gate, an exited constraint or anomaly loop counts as resolved only after a superseded exit that cites an External Evidence Source (`exit(..., evidence_ids=...)`); any other exit, including terminal, timeout, whistleblower and legal, still blocks it. A loop of the other types counts as closed only after a superseded exit (`CLOSING_EXITS`); a terminal exit counts as open. Re-entry follows the taxonomy:
 
 - stated for recoverable and delegated exits;
 - a successor is needed for forced and key-person exits;
@@ -131,12 +154,14 @@ Requirements are cumulative across the three execution classes.
 | Class | Requires |
 |---|---|
 | Routine | Every signal the decision depends on is registered; no Layer 0 void |
-| Elevated | Plus: classification acknowledged; no open loop left merely registered |
-| Irreversible | Plus all of the following: <ul><li>every constraint and anomaly loop closed by a chain-sound evidence closure, or exited terminal or superseded (weakest link)</li><li>evidence closure ratio (D4) over the other loop types</li><li>at least one External Evidence Source among the decision's evidence closures or the evidence cited in its Rule 4 acceptance</li><li>classification stabilized (D8)</li><li>recurrence groups reviewed</li><li>no unresolved structural reviews</li><li>open off-envelope or containment signals resolved</li><li>coherence at or above the threshold (D3)</li></ul> |
+| Elevated | Plus: classification acknowledged (a state on every signal; every nominal one cites an EES for its classifier, acceptor excluded); open loops documented (none merely registered; every open loop has a named steward) |
+| Irreversible | Plus all of the following: <ul><li>every constraint and anomaly loop closed by a chain-sound evidence closure, or superseded with an EES (weakest link; acceptor's evidence excluded)</li><li>the other loop types: chain-sound evidence closures / all such signals meets the ratio (D4), and none left open (each closed, or exited superseded)</li><li>the Rule 4 acceptance names a principal risk claim and cites an External Evidence Source for it (closure evidence does not substitute), and an independent agent has attested that the evidence bears on the claim (`attest_risk_evidence`)</li><li>classification stabilized: no reclassification toward less caution since each signal's first review opened (or within `Settings.stabilization_window`), and the acceptance carries the Rule 3 registration (known, assumed, uncertain)</li><li>recurrence groups reviewed</li><li>no unresolved structural reviews</li><li>open off-envelope or containment signals resolved</li><li>coherence at or above the threshold (D3)</li></ul> |
 
 **Execution class is checked, not trusted.** Every decision is irreversible unless shown otherwise. A declared routine or elevated class applies only if the decision has a registered reversal path, backed by at least one External Evidence Source showing the path was tested. That evidence can't come from whoever registered, reclassified or accepted the decision, or from a process under evaluation in its loops. Without that support, the gate applies the irreversible requirements and reports both classes (`GateResult.declared_class`, `GateResult.execution_class`). `reclassify_decision()` logs every change. Lowering a class after a refused request escalates, and that review blocks execution at every class, without override, until it is resolved.
 
-**Rule 4 acceptance** is required for every class and cannot be overridden: an agent must explicitly accept authorization, risk and rationale.
+**Rule 4 acceptance** is required for every class and cannot be overridden: an agent must explicitly accept authorization, risk and rationale. Every acceptor is kept (`Decision.acceptors`), and a re-acceptance that lowers the applied class after a blocked request is a relabeling, as is linking a signal that makes a lower-class decision share a blocked one's loops. The acceptor's obligation capacity is checked again at the gate.
+
+**Risk-evidence attestation** (`attest_risk_evidence(decision_id, by, rationale)`). For the irreversible gate, an agent other than the acceptor attests that the acceptance's evidence bears on the principal risk claim. The attester has never accepted the decision, has not requested it, is outside every acceptor's reporting line, has obligation capacity and, with authority enforced, holds `override` over the decision's scope. The attestation is logged (`RISK_EVIDENCE_ATTESTED`), voided by a new acceptance, and re-checked when the gate runs.
 
 ## Authority
 
@@ -147,7 +172,7 @@ The draft says a single agent must accept authorization (Rule 4) but not who may
 | `recommend` | `recommend()`: record a recommendation, which changes no gate | when made |
 | `authorize` | `accept_decision()`: the Rule 4 acceptance | when made, and again at execution |
 | `execute` | `request_execution()` | at the request, before any other gate; not overridable |
-| `override` | `request_execution(override_rationale=...)` | at the override; never available to the decision's accepting agent |
+| `override` | `request_execution(override_rationale=...)`, `request_execution(emergency=...)` or `attest_risk_evidence()` | at the override or attestation; never available to an agent who ever accepted the decision (except an Emergency Justification given on scene) |
 
 - A root holds every power over every scope and may delegate it. Anyone else holds a power only through a `Grant`, made with `grant()` by someone who holds it **delegably** over that scope.
 - A grant can't be wider than the grant that backs its grantor: same power, the same scope or a narrower one, delegable only if passed on as delegable, and an expiry no later than its parent's.
@@ -157,17 +182,23 @@ The draft says a single agent must accept authorization (Rule 4) but not who may
 - Choosing a decision's scope is itself an act of authority: only a root or a holder of delegable AUTHORIZE over a scope can put a decision there (`register_decision(scope=...)` or `assign_scope()`).
 - With no roots set, nothing is enforced and anyone may accept, as before.
 
-**Overrides** (draft, Layer 4, Execution Gates, Overrides). Three limits apply, and a refused override is logged as `OVERRIDE_REFUSED` with every reason:
+**Overrides** (draft, Layer 4, Execution Gates, Overrides). These limits apply, and a refused override is logged as `OVERRIDE_REFUSED` with every reason:
 
-- **Structural reviews hold irreversible execution.** Any unresolved review touching an irreversible decision (on the decision, or naming one of its signals) blocks it without override. A suppressed signal opens one at each request, so it holds the decision until it re-enters review. `resolve_review()` refuses (`REVIEW_RESOLUTION_REFUSED`) an agent who accepted, or has requested execution of, an unexecuted irreversible decision the review touches.
-- **The accepting agent cannot override.** At every class.
+- **Structural reviews hold irreversible execution.** Any unresolved review touching an irreversible decision (on the decision, or naming one of its signals) blocks it without override. A suppressed signal opens one at each request, so it holds the decision until it re-enters review.
+- **A Layer 0 void cannot be overridden at an irreversible decision.** At the other classes it is reported and may be overridden.
+- **The accepting agent cannot override**, at every class; nor can an agent in its reporting line (`register_reporting_line()`), directly or transitively.
+- **Obligation capacity** (Agent Admissibility): an open-loop authorization is a stewardship act. An agent registered (`register_agent()`) as automation or instrument, or a role without a successor, cannot override, accept a decision, give an Emergency Justification or resolve a review; as a steward or successor it is an AP-A void. It may still register signals and produce evidence. Agents never registered with a kind count as capable.
 - **Override is a power.** With authority enforced, the overrider needs `override` over the decision's scope.
+
+Where no agent meets the independence and capacity conditions, the refusal says so: the decision does not execute irreversibly, the absence is a stewardship void (AP-A), and the remedy is an external reviewer registered by the domain's principals.
 
 Within those limits, other gate failures, apart from the relabeling block, can be overridden. An override:
 
 - is logged with identity, rationale and time (`GATE_OVERRIDE`);
 - reports any architecture void;
-- on an irreversible decision, latches constraint and anomaly loops under review into `trajectory_lock` with a lock-in closure record, and logs `OPEN_LOOP_IRREVERSIBLE_EXECUTION` with those and every other constraint or anomaly loop that still fails the gate.
+- on an irreversible decision, latches every loop the gate did not count as resolved into `executed_open` (constraint and anomaly loops failing the gate in any state, including authority-closed and exited ones; other-type loops still open), each with an `OpenLoopAuthorization` (authorizer, rationale, decision), makes the authorizer their steward (`STEWARD_ASSIGNED`), and logs `OPEN_LOOP_IRREVERSIBLE_EXECUTION` (`GateResult.latched_signals`). A loop exited whistleblower or legal keeps its exit state, since it continues elsewhere, and carries the authorization as an annotation (`OPEN_LOOP_ANNOTATED`, `GateResult.annotated_signals`).
+
+**Emergency Justification** (`request_execution(..., emergency=EmergencyJustification(...))`). Only for an irreversible decision held only by off-envelope or containment reviews. All five elements are checked: a qualifying consequence (`EmergencyConsequence`: life-safety catastrophic, or CVSS-critical in a safety function; schedule and cost cannot be named), a time estimate, the options considered, best evidence on record (and every off-envelope signal behind the holds classified experimental or containment, every containment one still containment), and a giver who never accepted the decision and is outside every acceptor's reporting line, unless on scene. The giver needs obligation capacity and, with authority enforced, `override`. It never bypasses Rule 4, the `execute` power, the relabeling block or a Layer 0 void. Justifications are counted per failure mode since its last resolved Rule 7 review; the third is refused (a fixed count, whatever `Settings.recurrence_threshold` says) and opens a Rule 7 review on `emergency:<mode>` that no justification can suspend. The post-event review holds later irreversible decisions on the same loops, and a further justification may suspend it (and counts). On success: `EMERGENCY_JUSTIFICATION` logs every element, the holding reviews stay unresolved and are marked `suspended_by`, the latch applies with the giver as steward, and an `emergency_post_event` review opens. Nothing reads an outcome.
 
 An executed irreversible decision cannot be executed again.
 
@@ -175,7 +206,7 @@ An executed irreversible decision cannot be executed again.
 
 `architecture_check()` runs for every execution class and reports the voids it can see from registered facts. For each constraint and anomaly signal's failure mode (D9), it checks:
 
-- **AP-A / AP.1:** no steward.
+- **AP-A / AP.1:** no steward, or a steward or successor without obligation capacity (Agent Admissibility).
 - **AP.1b:** no successor, or a successor who is the steward (still a single point of failure).
 - **AP-F / AP.6:** every registered reporter is an interested party (a captured channel).
 - **AP-G:** the registrant is under sender discount.
@@ -184,7 +215,7 @@ Across the whole architecture, it also checks:
 
 - **AP.2:** a registered channel has not been tested under load, so it is treated as absent.
 
-AP.3, AP.4, AP.5 and AP.8 need interviews or document review and are not checked.
+AP.3, AP.4, AP.5 and AP.8 need interviews or document review and are not checked. Every gate record (`GateResult.unverified`, and the gate's audit entry) lists the sub-conditions of AP.2-AP.8 with no check behind them for that decision: always AP.3, AP.4, AP.5 and AP.8; AP.2 when no channel is registered; AP.6 when a failure mode of the decision's constraint and anomaly signals has no registered reporter (`unverified_preconditions()`). The list is a report and blocks nothing.
 
 ## Audit
 
@@ -201,7 +232,7 @@ Every operation that changes state appends an entry with a logical clock time, t
 | `parse_log()` | Replays a peer's log through the Layer 4 table and accepts only what an honest Supervisor could have written (one registration per signal, legal transitions from the current state, a mirror declared right after its registration). |
 | `Node.receive()` | Verifies signer, signature, chain and structure; refuses a rollback; two signed histories that differ, or a signed malformed log, mark the peer an equivocator (`PEER_FORK_DETECTED` and `PEER_MISBEHAVED` keep the signed heads as proof). Then re-checks every accepted remote closure, failing closed. |
 | `Node.depend()` | Registers a local mirror of a peer's loop (`MIRROR_REGISTERED`) and links it to a local decision. A nominal remote classification becomes elevated uncertainty. |
-| `Node.accept_remote_closure()` | Closes the mirror locally only if the peer's log shows a chain-sound evidence closure, recomputed here; at least one qualifying item has a producer attestation given to that peer, matching the log, with a valid signature and hash (and a passing re-check, for kinds the receiver can check); and the producer's and the evaluated process's lineage statements share nothing. Every upstream loop is verified the same way. A peer's mirror of a third node's loop is followed to that node's own log. |
+| `Node.accept_remote_closure()` | Closes the mirror locally only if the peer's log shows a chain-sound evidence closure, recomputed here with the same EES definition (the claimant is the closing agent) and the same chain rule (every cited item's upstream loops resolved; an upstream superseded with an attested EES counts); at least one qualifying item has a producer attestation given to that peer, matching the log, with a valid signature and hash (and a passing re-check, for kinds the receiver can check); and the producer's and the evaluated process's lineage statements share nothing. Every upstream loop is verified the same way. A peer's mirror of a third node's loop is followed to that node's own log. `parse_log()` also replays `DEPENDENCY_ADDED`. |
 | `SignedGrant`, `SignedRevocation` | Authority across nodes, addressed to one node. `receive_grant()` checks address and signature, then `Supervisor.grant()` checks the grantor's own authority there. |
 | `audit_federation()` | Checks every log and every cross-reference from outside, and catches a node that showed different peers different histories. |
 
@@ -212,4 +243,5 @@ Every operation that changes state appends an entry with a logical clock time, t
 - **Read meaning.** It checks evidence by kind and producer, not by content. A restatement filed as a "direct measurement" by an independent party passes.
 - **Authenticate actors inside one supervisor.** Names are recorded as given. Across nodes, signatures authenticate nodes, producers and grantors, but not the people behind the keys.
 - **Check AP.3, AP.4, AP.5 or AP.8.**
-- **Supply the thresholds.** The draft leaves them domain-configured; the defaults here (D1, D3–D6) are starting points.
+- **Supply the thresholds.** The draft leaves them domain-configured; it states the recurrence, authority-closure and AP-G defaults, which D1, D5 and D6 follow; D3 and D4 are this project's starting points.
+- **Judge an emergency by its outcome.** By design: an Emergency Justification is judged by its documented elements only.

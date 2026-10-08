@@ -66,6 +66,10 @@ from .types import CommitmentState as S, ExitType as X, LegalSubtype as L, CLOSE
 # tests (see the READER'S NOTE on frozenset in types.py).
 # ===========================================================================
 
+# LATCH_REASON — the condition text the spec writes beside the
+#   POST-EXECUTION LATCH; logged as the "rule" of every latch transition.
+LATCH_REASON = "open-loop authorization recorded"
+
 # TRANSITIONS — every allowed (from, to) state pair, mapped to the condition
 #   text the spec writes beside it in the Commitment State Machine listing
 #   (Layer 4). check_transition() looks pairs up here, and the text becomes
@@ -81,11 +85,13 @@ TRANSITIONS: dict[tuple[S, S], str] = {
     (S.UNDER_REVIEW, S.CLOSED_AUTHORITY):  "senior override, no new evidence",
     (S.UNDER_REVIEW, S.CLOSED_ROLE_SWITCH): "same agent, different role",
     (S.UNDER_REVIEW, S.SUPPRESSED):        "signal lost operational visibility",
-    (S.UNDER_REVIEW, S.ESCALATED):         "recurrence threshold crossed",
+    (S.UNDER_REVIEW, S.ESCALATED):         "an Escalation Condition met",
     (S.UNDER_REVIEW, S.TRAJECTORY_LOCK):   "revision capacity exhausted",
     # recovery
     # (the spec's RECOVERY TRANSITIONS: back into review)
-    (S.ESCALATED, S.UNDER_REVIEW):         "Rule 8 model update documented",
+    (S.ESCALATED, S.UNDER_REVIEW):         ("review resolved as its trigger requires; "
+                                            "suspension under an Emergency Justification "
+                                            "does not release it"),
     (S.SUPPRESSED, S.UNDER_REVIEW):        "re-entry logged; suppression permanent",
     # reopen
     # (the spec's REOPEN TRANSITIONS: "Closed states are stable but not
@@ -93,6 +99,23 @@ TRANSITIONS: dict[tuple[S, S], str] = {
     (S.CLOSED_EVIDENCE, S.UNDER_REVIEW):   "evidence invalidated or recurrence link",
     (S.CLOSED_AUTHORITY, S.UNDER_REVIEW):  "new evidence or recurrence linkage",
     (S.CLOSED_ROLE_SWITCH, S.UNDER_REVIEW): "mandatory independent review; L2 flag",
+    # post-execution latch
+    # (the spec's POST-EXECUTION LATCH: "any loop not resolved at
+    # irreversible execution -> executed_open (open-loop authorization
+    # recorded)". "Any loop" means from every state that is not already
+    # terminal: open, closed (a closure by authority or role switch, or an
+    # evidence closure that is not chain-sound, is not resolved), or exited
+    # ("whatever state it was in — open, closed by authority or role
+    # switch, or exited"). The two latched states themselves are terminal.)
+    (S.REGISTERED, S.EXECUTED_OPEN):        LATCH_REASON,
+    (S.CLASSIFIED, S.EXECUTED_OPEN):        LATCH_REASON,
+    (S.UNDER_REVIEW, S.EXECUTED_OPEN):      LATCH_REASON,
+    (S.CLOSED_EVIDENCE, S.EXECUTED_OPEN):   LATCH_REASON,
+    (S.CLOSED_AUTHORITY, S.EXECUTED_OPEN):  LATCH_REASON,
+    (S.CLOSED_ROLE_SWITCH, S.EXECUTED_OPEN): LATCH_REASON,
+    (S.SUPPRESSED, S.EXECUTED_OPEN):        LATCH_REASON,
+    (S.ESCALATED, S.EXECUTED_OPEN):         LATCH_REASON,
+    (S.EXITED, S.EXECUTED_OPEN):            LATCH_REASON,
 }
 
 # REOPEN_FROM — the states a reopen may start from: exactly the closed
@@ -100,8 +123,9 @@ TRANSITIONS: dict[tuple[S, S], str] = {
 #   Not currently read elsewhere in the package.
 REOPEN_FROM = CLOSED_STATES
 
-# OPEN_STATES — states from which a signal may exit. Closed states, trajectory
-#   lock, unregistered and already-exited signals are excluded.
+# OPEN_STATES — states from which a signal may exit. Closed states, the two
+#   latched states (trajectory lock, executed_open), unregistered and
+#   already-exited signals are excluded.
 # Open states from which any exit may be taken ("any open state -> exited").
 OPEN_STATES = frozenset({S.REGISTERED, S.CLASSIFIED, S.UNDER_REVIEW,
                          S.SUPPRESSED, S.ESCALATED})
@@ -162,7 +186,8 @@ def check_transition(current: S, target: S) -> tuple[bool, str]:
       "A closed loop cannot be silently reopened"      -> enforced by the
           Supervisor (reopen needs a rationale); here, a closed loop may only
           go back to under_review
-    Escalated, trajectory_lock and exited get their own messages too.
+    Escalated, trajectory_lock, executed_open and exited get their own
+    messages too.
     Exits are not checked here: see exit_allowed().
     """
     # --- Allowed: the pair is in the spec's table ---------------------------
@@ -183,10 +208,13 @@ def check_transition(current: S, target: S) -> tuple[bool, str]:
                            "review must first document a model update (Rules 7-8)")
     # --- Blocked: a closed loop going anywhere but back into review ---------
     if current in CLOSED_STATES and target != S.UNDER_REVIEW:
-        return False, "BLOCKED: a closed loop can only be reopened into review"
+        return False, ("BLOCKED: a closed loop can only be reopened into review (or "
+                       "latched into executed_open at an irreversible execution)")
     # --- Blocked: terminal and exited states --------------------------------
     if current == S.TRAJECTORY_LOCK:
         return False, "BLOCKED: trajectory_lock is terminal"
+    if current == S.EXECUTED_OPEN:
+        return False, "BLOCKED: executed_open is terminal"
     if current == S.EXITED:
         return False, "BLOCKED: exits leave only by the re-entry rule for their type"
     # --- Blocked: anything else simply is not in the table ------------------

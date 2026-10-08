@@ -1,12 +1,13 @@
 """
-THREE HISTORIES, REPLAYED
-A Play in Twelve Scenes
-=========================
+FIVE HISTORIES, REPLAYED
+A Play in Fifteen Scenes
+========================
 
 PROLOGUE
 --------
 Tests for the replayable case histories in scenarios/ (Challenger,
-Therac-25, Boeing 737 MAX MCAS), each run end to end through
+Therac-25, Boeing 737 MAX MCAS, Apollo 13, US Airways 1549), each run end
+to end through
 cclf.graph.replay(). The expected outcomes come from what CCL-F v0.2 says
 about each case:
 
@@ -22,8 +23,15 @@ about each case:
     Eight Sub-Conditions, AP.6 — Reporter Independence; Layer 0, The Eight
     Void Types, AP-F: Captured Channel).
   MCAS: classified a "minor stability enhancement" (Rule 2); behaved
-    differently in different internal documents, never stabilized (Rule 3);
-    the AR's standing subordinated to the regulated company (Rule 9).
+    differently in different internal documents, never stabilized (Rule 3:
+    nothing known, assumed or uncertain was ever registered with the
+    decision); the AR's standing subordinated to the regulated company
+    (Rule 9).
+  Apollo 13 and Flight 1549: the two cases the draft says meet the
+    Emergency Justification (Layer 4, Overrides): "Apollo 13 had hours and
+    a separate authority on the ground; Flight 1549 had minutes and no
+    time to consult one". Both are judged by their elements; neither is
+    credited for its outcome, and nothing here reads an outcome.
 
 Every replay must leave an intact audit chain (Layer 4, Audit Trail).
 
@@ -42,6 +50,9 @@ THE PLAYBILL
     Scene 10  test_therac25_captured_channel_blocks_execution
     Scene 11  test_mcas_unstable_classification_and_captured_channel
     Scene 12  test_mcas_override_refused
+    Scene 13  test_apollo13_emergency_justification_by_separate_authority
+    Scene 14  test_usair1549_emergency_justification_on_scene
+    Scene 15  test_schedule_pressure_framed_as_emergency_is_refused
 
 READER'S NOTE — a module-level cache
     Replaying a scenario takes a moment (the graph is rebuilt each time).
@@ -54,8 +65,9 @@ READER'S NOTE — a module-level cache
 # STAGE MANAGEMENT (imports)
 # ---------------------------------------------------------------------------
 # pytest       parametrize.
-# cclf         Advisor, AuditTrail, CommitmentState, EscalationCondition,
-#              OperationalState, replay.
+# cclf         Advisor, Architecture, AuditTrail, CommitmentState,
+#              EmergencyConsequence, EmergencyJustification,
+#              EscalationCondition, OperationalState, TransitionRefused, replay.
 # scenarios    SCENARIOS: name -> list of events.
 # stagehands   entries.
 # ===========================================================================
@@ -63,8 +75,8 @@ READER'S NOTE — a module-level cache
 import pytest
 
 from cclf import (
-    Advisor, AuditTrail, CommitmentState, EscalationCondition, OperationalState,
-    TransitionRefused, replay,
+    Advisor, Architecture, AuditTrail, CommitmentState, EmergencyConsequence,
+    EmergencyJustification, EscalationCondition, OperationalState, TransitionRefused, replay,
 )
 from scenarios import SCENARIOS
 from stagehands import entries
@@ -230,6 +242,7 @@ def test_challenger_framing_suppresses_uncertainty():
 # Proves: the launch gate is blocked (open constraints, unreviewed
 # recurrence, Layer 0 stewardship void), and the override that follows is
 # refused (Layer 4, Overrides): unresolved structural reviews hold an
+# irreversible decision, a Layer 0 void cannot be overridden at an
 # irreversible decision, and the accepting agent cannot override its gate.
 # ===========================================================================
 
@@ -240,7 +253,7 @@ def test_challenger_launch_blocked_and_override_refused():
     Enter:   (nothing)
     Exit:    passes if the blocked failures include open constraints,
              unreviewed recurrence and AP-A; the override is refused for
-             both reasons; nothing executed, overrode or latched
+             all three reasons; nothing executed, overrode or latched
     """
     # PLAYERS IN THIS SCENE
     #   sv         the Challenger replay's Supervisor
@@ -261,6 +274,7 @@ def test_challenger_launch_blocked_and_override_refused():
     assert refused.actor == "kilminster"
     assert "hold irreversible execution" in reasons and "cannot be overridden" in reasons
     assert "kilminster accepted this decision" in reasons
+    assert "Layer 0 void cannot be overridden" in reasons
     assert not sv.decisions["launch-51L"].executed
     assert entries(sv, "GATE_OVERRIDE") == []
     assert entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION") == []
@@ -270,18 +284,21 @@ def test_challenger_launch_blocked_and_override_refused():
 # SCENE 7 — CHALLENGER: WHAT IT WOULD TAKE TO LAUNCH
 # Proves: the runtime leaves one way forward, the one the draft names.
 # Another agent's override is still refused while the reviews are open;
-# nobody who accepted or requested the launch may resolve them; once
-# someone else documents each Rule 8 model update, and the suppressed
-# signal is brought back into view, an override by an agent other than the
-# acceptor goes ahead, and every constraint loop still under review is
-# latched into trajectory lock. (The agents after the
-# replay are hypothetical roles, not historical claims.)
+# nobody who accepted or requested the launch may resolve them; each review
+# is resolved by what its trigger requires (the off-envelope one only by
+# evidence-based reclassification); the Layer 0 void cannot be overridden,
+# so the architecture has to be registered; the suppressed signal has to be
+# brought back into view. Then an override by an agent other than the
+# acceptor goes ahead, and every loop the gate does not count as resolved
+# is latched into executed_open with that agent as its steward. (The agents
+# and evidence after the replay are hypothetical, not historical claims.)
 # ===========================================================================
 
 def test_challenger_what_it_takes_to_launch():
     """
     Override refused while reviews are open; conflicted resolvers refused;
-    independent resolution, then a separate override, executes with lock-in.
+    independent resolution by trigger; void refused, then architecture
+    registered; a separate override executes with the latch.
 
     Enter:   (nothing)
     Exit:    passes if each step behaves as described above
@@ -289,9 +306,10 @@ def test_challenger_what_it_takes_to_launch():
     # PLAYERS IN THIS SCENE
     #   sv        a fresh Challenger replay (not the cached one: this test
     #             changes it)
+    #   held      the GateResult of an override while reviews are open
     #   r         each open review
     #   result    the final GateResult
-    #   locked    signals latched into trajectory lock
+    #   latched   signals latched into executed_open
 
     sv = replay(SCENARIOS["challenger"], advisor=OFFLINE_ADVISOR)
     # Another agent's override: still held by the reviews.
@@ -301,32 +319,57 @@ def test_challenger_what_it_takes_to_launch():
     open_ids = [r.review_id for r in sv.open_reviews()]
     for conflicted in ("kilminster", "launch-director"):
         with pytest.raises(TransitionRefused):
-            sv.resolve_review(open_ids[0], conflicted, "erosion is acceptable")
-    # An independent reviewer documents each model update.
+            sv.resolve_review(open_ids[0], conflicted, "erosion is acceptable",
+                              elements_changed=["nothing"], level="flight")
+    # The off-envelope review cannot be resolved by a Rule 8 update, only by
+    # an evidence-based reclassification out of off-envelope.
+    [off] = [r for r in sv.open_reviews() if r.trigger == OperationalState.OFF_ENVELOPE]
+    with pytest.raises(TransitionRefused, match="reclassified out of off-envelope"):
+        sv.resolve_review(off.review_id, "independent-review-board", finding="looks fine")
+    sv.add_evidence("cold-joint-test", "joint seals at the forecast temperature", "test rig",
+                    "direct_measurement", "independent-test-lab", "independent-review-board")
+    sv.classify("cold-oring-no-launch", OperationalState.ELEVATED_UNCERTAINTY,
+                "independent-review-board", ["cold-joint-test"])
+    # An independent reviewer resolves each review by what its trigger requires.
     for r in sv.open_reviews():
-        sv.resolve_review(r.review_id, "independent-review-board",
-                          "joint erosion is a design defect: a new launch constraint "
-                          "with a temperature floor and a redesign requirement")
+        if r is off:
+            sv.resolve_review(r.review_id, "independent-review-board",
+                              finding="seal tested at the forecast temperature")
+        else:
+            sv.resolve_review(r.review_id, "independent-review-board",
+                              "joint erosion is a design defect: a new launch constraint "
+                              "with a temperature floor and a redesign requirement",
+                              elements_changed=["launch constraint: joint temperature floor",
+                                                "stewardship: joint redesign owner"],
+                              level="the SRB joint design, not each flight's waiver")
     # A suppressed signal reopens a review at every request: it has to be
-    # brought back into view first.
+    # brought back into view first. And the Layer 0 void is no failure an
+    # override can answer at an irreversible decision.
     still = sv.request_execution("launch-51L", "launch-director", override_rationale="go")
     assert not still.permitted
+    assert any("Layer 0 void cannot be overridden" in f for f in still.failures)
     sv.reenter_suppressed("seal-uncertainty", "independent-review-board",
                           "the burden-of-proof frame is withdrawn; uncertainty back in review")
     for r in sv.open_reviews():
         sv.resolve_review(r.review_id, "independent-review-board",
                           "suppression of a safety uncertainty by framing is a coordination "
-                          "failure: framing signals now require evidence closure")
+                          "failure: framing signals now require evidence closure",
+                          elements_changed=["classification criterion: framing signals"])
+    sv.register_architecture(Architecture(stewards={"srb-joint-seal": "srb-joint-owner"},
+                                          successors={"srb-joint-seal": "srb-deputy"}),
+                             by="nasa-principals")
     result = sv.request_execution("launch-51L", "launch-director",
                                   override_rationale="proceeding under the new constraint")
-    assert result.permitted and result.overridden
-    locked = sorted(s.signal_id for s in sv.signals.values() if s.state == S.TRAJECTORY_LOCK)
-    assert "cold-oring-no-launch" in locked             # the night-before constraint
-    assert sv.signals["seal-uncertainty"].state == S.UNDER_REVIEW   # back in view; an
-    #   uncertainty loop is not latched (only constraint and anomaly loops are)
-    assert set(FRR_LATE) <= set(locked)                 # escalated, then released by review
-    assert not any(s.state in (S.ESCALATED, S.SUPPRESSED)
-                   for s in sv.signals.values() if s.high_consequence)
+    assert result.permitted and result.overridden, result.failures
+    latched = sorted(s.signal_id for s in sv.signals.values() if s.state == S.EXECUTED_OPEN)
+    assert latched == sorted(result.latched_signals)
+    assert "cold-oring-no-launch" in latched             # the night-before constraint
+    assert "seal-uncertainty" in latched                 # an open loop of another type
+    assert set(FRR_LATE) <= set(latched)                 # escalated, then released by review
+    assert all(sv.signals[x].steward == "launch-director" for x in latched)
+    assert not any(s.state in (S.ESCALATED, S.SUPPRESSED, S.UNDER_REVIEW)
+                   for s in sv.signals.values())
+    assert entries(sv, "OPEN_LOOP_IRREVERSIBLE_EXECUTION")[0].actor == "launch-director"
 
 
 # ===========================================================================
@@ -406,18 +449,22 @@ def test_therac25_captured_channel_blocks_execution():
 
 # ===========================================================================
 # SCENE 11 — MCAS: NEVER STABILIZED, CAPTURED REPORTER
-# Proves: Rules 2-3: the nominal classifications are refused and the MCAS
-# classification is reclassified during review (unstable); Rule 9 / AP-F:
-# the AR's only route is inside the regulated company.
+# Proves: Rules 2-3: the nominal classifications are refused; the
+# acceptance names nothing known, assumed or uncertain, so the
+# classification is not stabilized (Rule 3 registration), while the later
+# reclassification to experimental, being toward caution, is not itself
+# the instability; Rule 9 / AP-F: the AR's only route is inside the
+# regulated company.
 # ===========================================================================
 
 def test_mcas_unstable_classification_and_captured_channel():
     """
-    The enter-service gate names the unstable classification and AP-F.
+    The enter-service gate names the missing Rule 3 registration and AP-F.
 
     Enter:   (nothing)
     Exit:    passes if two nominal classifications were refused and the
-             blocked failures include both findings
+             blocked failures include both findings, and the raise to
+             experimental is not reported as a lowering
     """
     # PLAYERS IN THIS SCENE
     #   failures   the blocked gate's failures, joined
@@ -426,7 +473,9 @@ def test_mcas_unstable_classification_and_captured_channel():
     sv, _ = replayed("mcas")
     assert len(entries(sv, "CLASSIFICATION_REJECTED")) == 2
     failures = " | ".join(entries(sv, "EXECUTION_BLOCKED")[0].payload["failures"])
-    assert "classification not stabilized: ['mcas-classification']" in failures
+    assert "classification not stabilized: the Rule 4 acceptance carries no Rule 3 " \
+           "registration" in failures
+    assert "classification not stabilized: ['mcas-classification']" not in failures
     assert "AP-F captured channel" in failures
 
 
@@ -449,7 +498,127 @@ def test_mcas_override_refused():
     reasons = " | ".join(refused.payload["reasons"])
     assert refused.actor == "boeing"
     assert "hold irreversible execution" in reasons and "boeing accepted" in reasons
+    assert "Layer 0 void cannot be overridden" in reasons
     assert entries(sv, "GATE_OVERRIDE") == []
     assert not sv.decisions["enter-service"].executed
+
+
+# ===========================================================================
+# SCENE 13 — APOLLO 13: A SEPARATE AUTHORITY ON THE GROUND
+# Proves: the Emergency Justification the draft says Apollo 13 meets: an
+# irreversible decision held only by an off-envelope review proceeds; the
+# justification is given by an agent other than the acceptor (element 5);
+# the review is suspended, not resolved; the loop is carried open with the
+# ground authority as steward; the post-event review opens.
+# ===========================================================================
+
+def test_apollo13_emergency_justification_by_separate_authority():
+    """
+    Enter:   (nothing)
+    Exit:    passes if the first request is blocked, the justification
+             executes the decision, the giver is not the acceptor, the
+             off-envelope review is suspended and unresolved, and a
+             post-event review is open
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv        the Apollo 13 replay's Supervisor
+    #   d         the decision
+    #   given     the EMERGENCY_JUSTIFICATION entry
+    #   off, post the off-envelope and post-event reviews
+
+    sv, _ = replayed("apollo13")
+    d = sv.decisions["lifeboat-return"]
+    assert d.executed and d.accepted_by == "apollo-13-crew"
+    assert len(entries(sv, "EXECUTION_BLOCKED")) == 1
+    [given] = entries(sv, "EMERGENCY_JUSTIFICATION")
+    assert given.actor == "mission-control" and given.payload["on_scene"] is False
+    assert given.payload["consequence"] == "life_safety_catastrophic"
+    [off] = [r for r in sv.reviews if r.condition == E.OFF_ENVELOPE_OR_CONTAINMENT]
+    assert not off.resolved and off.suspended_by == ["EJ1"]
+    [post] = [r for r in sv.reviews if r.condition == E.EMERGENCY_POST_EVENT]
+    assert not post.resolved and post.decision_id == "lifeboat-return"
+    assert sv.signals["lm-as-lifeboat"].state == S.EXECUTED_OPEN
+    assert sv.signals["lm-as-lifeboat"].steward == "mission-control"
+    assert sv.signals["lm-as-lifeboat"].operational_state == OperationalState.EXPERIMENTAL
+
+
+# ===========================================================================
+# SCENE 14 — FLIGHT 1549: THE AGENT ON SCENE, ALONE
+# Proves: the on-scene proviso of element 5: the captain accepted the
+# decision and gives the justification alone; the post-event review, which
+# "must confirm" the time estimate, is resolved afterward by an independent
+# board, not by the captain.
+# ===========================================================================
+
+def test_usair1549_emergency_justification_on_scene():
+    """
+    Enter:   (nothing)
+    Exit:    passes if the decision executed under EJ1 given by its own
+             acceptor on scene, with the documented options and both
+             records as best evidence, and the post-event review resolves
+             only by the independent board
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv      a fresh replay (this scene changes it)
+    #   given   the EMERGENCY_JUSTIFICATION entry
+    #   post    the post-event review
+
+    sv = replay(SCENARIOS["usair1549"], advisor=OFFLINE_ADVISOR)
+    assert sv.decisions["ditch-in-hudson"].executed
+    [given] = entries(sv, "EMERGENCY_JUSTIFICATION")
+    assert given.actor == "captain" == given.payload["accepted_by"]
+    assert given.payload["on_scene"] is True
+    assert len(given.payload["options_considered"]) == 3
+    assert given.payload["best_evidence"] == ["thrust-and-airspeed", "cockpit-voice-recorder"]
+    assert sv.signals["hudson-ditching"].steward == "captain"
+    [post] = [r for r in sv.reviews if r.condition == E.EMERGENCY_POST_EVENT]
+    with pytest.raises(TransitionRefused):
+        sv.resolve_review(post.review_id, "captain", finding="all held", elements_held=True)
+    sv.resolve_review(post.review_id, "accident-investigation-board",
+                      finding="each element held; the time estimate is confirmed by the "
+                              "contemporaneous record", elements_held=True)
+    assert post.resolved and post.elements_held is True
+
+
+# ===========================================================================
+# SCENE 15 — SCHEDULE PRESSURE DRESSED AS AN EMERGENCY
+# Proves: the Challenger launch cannot proceed under an "emergency": its
+# holds are failures of the coordination process (recurrence, authority
+# count, suppression), not conditions of the world; its Layer 0 void cannot
+# be suspended; the off-envelope O-ring is not registered experimental; and
+# a consequence of schedule cannot even be stated.
+# ===========================================================================
+
+def test_schedule_pressure_framed_as_emergency_is_refused():
+    """
+    Enter:   (nothing)
+    Exit:    passes if the justification is refused for each of those
+             reasons, nothing is suspended, the launch does not execute,
+             and a "schedule" consequence raises ValueError
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv       a fresh Challenger replay (this scene changes it)
+    #   ej       the claimed justification
+    #   result   the GateResult
+    #   why      its failures, joined
+
+    sv = replay(SCENARIOS["challenger"], advisor=OFFLINE_ADVISOR)
+    sv.add_evidence("launch-schedule", "launch window closes", "manifest",
+                    "primary_document", "launch-manifest", "launch-director")
+    ej = EmergencyJustification(
+        consequence=EmergencyConsequence.LIFE_SAFETY_CATASTROPHIC,
+        time_estimate="the launch window closes tomorrow",
+        options_considered=("slip the launch: schedule and contract cost",),
+        best_evidence=("launch-schedule",), on_scene=False,
+        rationale="the programme cannot afford another slip")
+    result = sv.request_execution("launch-51L", "launch-director", emergency=ej)
+    why = " | ".join(result.failures)
+    assert not result.permitted and not sv.decisions["launch-51L"].executed
+    assert "coordination process itself" in why               # recurrence etc.
+    assert "Layer 0 void cannot be suspended" in why
+    assert "cold-oring-no-launch" in why and "not experimental" in why
+    assert all(r.suspended_by == [] for r in sv.reviews)
+    with pytest.raises(ValueError):
+        EmergencyConsequence("schedule")
 
 # EXEUNT — end of file.

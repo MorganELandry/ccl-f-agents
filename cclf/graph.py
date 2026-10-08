@@ -111,7 +111,9 @@ READER'S NOTE — why a refused operation is recorded, not raised
 # .supervisor              Supervisor (the rule engine) and TransitionRefused
 #                          (the exception it raises when a rule says no).
 # .types                   the enum classes that _coerce() converts strings
-#                          into, plus Architecture for register_architecture.
+#                          into, plus Architecture for register_architecture
+#                          and EmergencyJustification (with its
+#                          EmergencyConsequence) for an "emergency" field.
 # ===========================================================================
 
 from __future__ import annotations
@@ -123,8 +125,8 @@ from langgraph.graph import END, START, StateGraph
 from .advisor import Advisor
 from .supervisor import Supervisor, TransitionRefused
 from .types import (
-    Architecture, EvidenceKind, ExecutionClass, ExitType, LegalSubtype,
-    OperationalState, Referent, SignalType,
+    AgentKind, Architecture, EmergencyConsequence, EmergencyJustification, EvidenceKind,
+    ExecutionClass, ExitType, LegalSubtype, OperationalState, Referent, SignalType,
 )
 
 
@@ -139,7 +141,7 @@ from .types import (
 _ENUM_FIELDS = {
     "signal_type": SignalType, "referent": Referent, "state": OperationalState,
     "kind": EvidenceKind, "execution_class": ExecutionClass, "exit_type": ExitType,
-    "legal_subtype": LegalSubtype,
+    "legal_subtype": LegalSubtype, "agent_kind": AgentKind,
 }
 
 
@@ -189,7 +191,8 @@ def _coerce(args: dict) -> dict:
     Enter:   args   the event's keyword arguments (op and note already removed)
     Exit:    a new dict with the same keys; any key listed in _ENUM_FIELDS
              whose value is a str is replaced by the enum member, e.g.
-             "nominal" -> OperationalState.NOMINAL
+             "nominal" -> OperationalState.NOMINAL; an "emergency" dict
+             becomes an EmergencyJustification
              raises ValueError if such a string is not a valid enum value
     """
     # PLAYERS IN THIS SCENE
@@ -201,6 +204,17 @@ def _coerce(args: dict) -> dict:
         # The isinstance check leaves already-converted enums (and any
         # non-string such as a list) alone.
         out[k] = _ENUM_FIELDS[k](v) if k in _ENUM_FIELDS and isinstance(v, str) else v
+    # An "emergency" given as a JSON object becomes an EmergencyJustification;
+    # its consequence must be one of the EmergencyConsequence values, so a
+    # justification naming schedule or cost cannot even be built (ValueError).
+    # `**dict` passes the object's keys as keyword arguments; lists become
+    # the tuples the frozen record holds.
+    if isinstance(out.get("emergency"), dict):
+        ej = dict(out["emergency"])
+        ej["consequence"] = EmergencyConsequence(ej["consequence"])
+        ej["options_considered"] = tuple(ej.get("options_considered", ()))
+        ej["best_evidence"] = tuple(ej.get("best_evidence", ()))
+        out["emergency"] = EmergencyJustification(**ej)
     return out
 
 

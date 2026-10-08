@@ -316,7 +316,8 @@ def test_unknown_and_private_operations_are_refused():
     "_move" and "teleport" events are refused, and change nothing.
 
     Enter:   (nothing)
-    Exit:    passes if both outcomes are refused and the audit log is empty
+    Exit:    passes if both outcomes are refused and the audit log holds
+             only the SETTINGS entry every new Supervisor writes
     """
     # PLAYERS IN THIS SCENE
     #   sv      a fresh Supervisor
@@ -327,7 +328,7 @@ def test_unknown_and_private_operations_are_refused():
     graph = build_graph(sv, Advisor(ask=fake_model(NOMINAL_REPLY)))
     for op in ("_move", "teleport"):
         assert graph.invoke({"event": {"op": op, "by": "x"}})["refused"] is True
-    assert len(sv.audit) == 0
+    assert [e.event for e in sv.audit.entries()] == ["SETTINGS"]
 
 
 # ===========================================================================

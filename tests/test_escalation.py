@@ -1,7 +1,7 @@
 """
 THE TEN ALARMS
-A Play in Nineteen Scenes
-=========================
+A Play in Twenty-One Scenes
+===========================
 
 PROLOGUE
 --------
@@ -14,35 +14,43 @@ State Machine).
 The spec lists ten conditions that "automatically escalate to structural
 review". The code names them in EscalationCondition. Scenes 1-11 make each
 of the first nine happen and check that a StructuralReview with that
-condition is opened. The tenth (execution class downgraded after a blocked
-request, EXECUTION_CLASS_DOWNGRADE_AFTER_BLOCK) is tested in
+condition is opened (Scene 7 now proves the override no longer produces
+lock-in, so that condition has no runtime trigger left). The tenth
+(execution class downgraded after a blocked request,
+EXECUTION_CLASS_DOWNGRADE_AFTER_BLOCK) is tested in
 tests/test_execution_class.py. Then the recovery rules are checked: an escalated
 signal cannot close (Rules 7-8), and it returns to under_review only when
-the review documents a coordination-model update (Rule 8: "the review
+the review is resolved by what its trigger requires (Rule 8: "the review
 produce a documented update to the coordination model — not a
-re-approval of existing practice").
+re-approval of existing practice"; off-envelope and containment reviews
+are resolved differently, see tests/test_review_resolution.py).
 
-Settings the spec leaves open are the code's choices (D1, D5): recurrence
-threshold 3 and authority-closure threshold 1 ("exceeds", so two
-closures). The sender-discount threshold of 3 (D6) is now fixed by the spec
-itself (Credibility Discounting, AP-G threshold: "The threshold is three"),
+The recurrence threshold 3 (D1) and authority-closure threshold 1
+("exceeds", so two closures; D5) are now the spec's stated defaults
+(Escalation Conditions, Thresholds). The sender-discount threshold of 3
+(D6) is fixed by the spec itself (Credibility Discounting, AP-G threshold:
+"The threshold is three"),
 and so is the "stable or improving" accuracy rule (D7; Layer 4, Execution
 Gates, operational definitions). Tests that pin those numbers say so in
 their docstrings.
 
 THE PLAYBILL
+    (Helpers: conditions(), and score(), which records an outcome that
+    counts by citing independent evidence.)
     Scene 1   test_recurrence_threshold_escalates_on_third_member   (impl. decision D1)
     Scene 2   test_off_envelope_or_containment_escalates          (parametrized, 2 runs)
     Scene 3   test_authority_closure_count_escalates             (impl. decision D5)
     Scene 4   test_authority_count_ignores_closure_order          (was a spec mismatch; now fixed)
     Scene 5   test_role_switch_on_constraint_escalates
     Scene 6   test_role_switch_on_non_constraint_does_not_escalate
-    Scene 7   test_lock_in_with_open_constraints_escalates
+    Scene 7   test_override_records_no_lock_in_and_opens_no_lock_in_review
     Scene 8   test_suppressed_before_execution_escalates
     Scene 9   test_framing_adopted_over_open_constraints_escalates
     Scene 10  test_credibility_discounting_escalates_only_for_accurate_senders
     Scene 11  test_sender_discount_recurrence_is_ap_g          (spec AP-G threshold; D6)
-    Scene 12  test_accuracy_rule               (draft definition, D7; parametrized, 8 runs)
+    Scene 12  test_accuracy_rule               (spec definition, D7; parametrized, 11 runs)
+    Scene 12b test_outcomes_without_evidence_or_scored_by_the_discounter_do_not_count
+    Scene 12c test_outcome_records_scorer_and_refuses_unknown_evidence
     Scene 13  test_escalated_signal_cannot_close
     Scene 14  test_resolution_requires_model_update
     Scene 15  test_resolution_recovers_signals_to_under_review
@@ -63,7 +71,8 @@ READER'S NOTE — Settings
 # pytest       fixtures, parametrize, raises.
 # cclf         CommitmentState, EscalationCondition, OperationalState,
 #              SignalType, Supervisor, TransitionRefused.
-# stagehands   CUST, TECH, PROCESS, to_review, decision.
+# stagehands   CUST, TECH, PROCESS, UPDATE, UPDATE_AT_LEVEL, add_ees,
+#              to_review, decision.
 # ===========================================================================
 
 import pytest
@@ -72,7 +81,9 @@ from cclf import (
     CommitmentState, EscalationCondition, OperationalState, SignalType, Supervisor,
     TransitionRefused,
 )
-from stagehands import CUST, PROCESS, TECH, decision, to_review
+from stagehands import (
+    CUST, PROCESS, TECH, UPDATE, UPDATE_AT_LEVEL, add_ees, decision, to_review,
+)
 
 
 # ===========================================================================
@@ -108,6 +119,25 @@ def conditions(sv):
     Exit:    a set of EscalationCondition values
     """
     return {r.condition for r in sv.reviews}
+
+
+def score(sv, agent, correct, by="observer"):
+    """
+    Record one scored outcome that counts: it cites independent-lab
+    evidence (an External Evidence Source for the scorer's claim).
+
+    Enter:   sv        a Supervisor
+             agent     whose signal it was
+             correct   True if it proved right
+             by        the scoring agent (default "observer")
+    Exit:    the OutcomeRecord
+    """
+    # PLAYERS IN THIS SCENE
+    #   eid   a fresh evidence id
+
+    eid = f"outcome-{len(sv.evidence) + 1}"
+    add_ees(sv, eid)
+    return sv.record_signal_outcome(agent, correct, by, evidence_ids=[eid])
 
 
 # ===========================================================================
@@ -255,23 +285,31 @@ def test_role_switch_on_non_constraint_does_not_escalate(sv):
 
 
 # ===========================================================================
-# SCENE 7 — LOCK-IN OVER OPEN CONSTRAINTS
-# Proves: "Lock-in closure detected in the presence of open constraint
-# loops" escalates when an irreversible gate is overridden.
+# SCENE 7 — NO LOCK-IN AT AN OVERRIDE
+# Proves: since October 2026 an irreversible override latches open loops
+# into executed_open and records no lock-in closure, so it no longer opens
+# "Lock-in closure detected in the presence of open constraint loops". The
+# condition stays in the vocabulary for analyses that find lock-in: "The
+# runtime refuses such overrides, so it does not produce `trajectory_lock`
+# at execution" (Layer 4, Commitment State Machine).
 # ===========================================================================
 
-def test_lock_in_with_open_constraints_escalates(sv):
+def test_override_records_no_lock_in_and_opens_no_lock_in_review(sv):
     """
-    Overriding an irreversible gate with a constraint under review escalates.
+    Setting the stage: a constraint under review, an accepted irreversible
+    decision. The action: another agent overrides. The verdict: no
+    LOCK_IN_WITH_OPEN_CONSTRAINTS review, no lock-in closure, the
+    constraint is executed_open.
 
     Enter:   sv   fixture
-    Exit:    passes if LOCK_IN_WITH_OPEN_CONSTRAINTS is opened for the decision
+    Exit:    passes if all three hold
     """
     to_review(sv, "c")
     decision(sv, "d", ["c"])
     sv.request_execution("d", "risk-officer", override_rationale="schedule")
-    assert any(r.condition == E.LOCK_IN_WITH_OPEN_CONSTRAINTS and r.scope == "decision:d"
-               for r in sv.reviews)
+    assert E.LOCK_IN_WITH_OPEN_CONSTRAINTS not in conditions(sv)
+    assert sv.signals["c"].closures == []
+    assert sv.signals["c"].state == S.EXECUTED_OPEN
 
 
 # ===========================================================================
@@ -333,8 +371,8 @@ def test_credibility_discounting_escalates_only_for_accurate_senders(sv):
     Exit:    passes if exactly one CREDIBILITY_DISCOUNTING review exists,
              scoped to the accurate agent
     """
-    sv.record_signal_outcome("accurate", True, "observer")
-    sv.record_signal_outcome("inaccurate", False, "observer")
+    score(sv, "accurate", True)
+    score(sv, "inaccurate", False)
     sv.record_credibility_discount("accurate", "manager", "too direct")
     sv.record_credibility_discount("inaccurate", "manager", "too direct")
     assert [(r.condition, r.scope) for r in sv.reviews] == \
@@ -364,7 +402,7 @@ def test_sender_discount_recurrence_is_ap_g(sv):
     #   label    each characterization used for the first two discounts
     #   result   GateResult for a decision over boisjoly's signal
 
-    sv.record_signal_outcome("boisjoly", True, "observer")
+    score(sv, "boisjoly", True)
     for label in ("difficult", "not a team player"):
         sv.record_credibility_discount("boisjoly", "manager", label)
     assert E.SENDER_DISCOUNT_RECURRENCE not in conditions(sv)
@@ -386,22 +424,25 @@ def test_sender_discount_recurrence_is_ap_g(sv):
 
 @pytest.mark.parametrize("record,expected", [
     ([], False),                         # no track record: no claim of accuracy
-    ([True], True),                      # one correct outcome counts
+    ([True], True),                      # one to three: overall >= 1/2 only
     ([False], False),
-    ([False, True], True),               # improving
-    ([True, False], False),              # declining
+    ([False, True], True),               # overall 0.5
+    ([True, False], True),               # overall 0.5: too few to compare halves
+    ([True, False, False], False),       # overall 1/3
     ([True, False, True, False], True),  # stable at 0.5 -> 0.5, overall 0.5
     ([True, True, False, True], False),  # 1.0 -> 0.5 is declining, despite 0.75 overall
     ([False, False, False, False], False),  # stable but below one half overall
+    ([False, True, True, False, True], True),   # odd: [F,T] 0.5 -> [T,F,T] 0.67
+    ([True, True, True, False, False], False),  # odd: [T,T] 1.0 -> [T,F,F] 0.33
 ])
 def test_accuracy_rule(sv, record, expected):
     """
-    The draft's definition (D7): "two conditions together: the agent's
-    accuracy over the later half of their recorded outcomes is no lower
-    than over the earlier half ..., and their overall accuracy is at least
-    one half"; "A single recorded outcome is stable or improving if it was
-    correct and not if it was wrong"; no record means a discount is
-    unsupported.
+    The spec's definition (D7): "With at least four scored outcomes, the
+    rate is stable or improving when accuracy over the later half is no
+    lower than over the earlier half (with an odd count, the later half
+    takes the extra outcome) and overall accuracy is at least one half.
+    With one to three, the halves are too small to compare, and only the
+    second condition applies"; no record means a discount is unsupported.
 
     Enter:   sv         fixture
              record     outcomes recorded for agent "a", in order
@@ -412,8 +453,64 @@ def test_accuracy_rule(sv, record, expected):
     #   correct   each recorded outcome in turn
 
     for correct in record:
-        sv.record_signal_outcome("a", correct, "observer")
+        score(sv, "a", correct)
     assert sv.accuracy_stable_or_improving("a") is expected
+
+
+# ===========================================================================
+# SCENE 12b — WHICH OUTCOMES COUNT
+# Proves: "An outcome counts only if it was scored by a party that meets
+# the External Evidence Source test with respect to the discounting agent:
+# the agent whose discount is being judged cannot score the record that
+# judges it", and an outcome is correct only when "confirmed by an External
+# Evidence Source" (Layer 4, Execution Gates, "Stable or improving accuracy
+# rate").
+# ===========================================================================
+
+def test_outcomes_without_evidence_or_scored_by_the_discounter_do_not_count(sv):
+    """
+    Setting the stage: three outcomes for "pat": one with no evidence, one
+    whose only evidence the scorer produced, one scored by "manager" with
+    independent evidence. The action: judge pat's record, in general and
+    for a discount by "manager". The verdict: only the third counts in
+    general; none counts against manager's own discount, so manager's
+    discount is unsupported and escalates.
+
+    Enter:   sv   fixture
+    Exit:    passes if the counts and the escalation are as above
+    """
+    sv.record_signal_outcome("pat", False, "observer")                  # no evidence
+    add_ees(sv, "own", produced_by="scorer")
+    sv.record_signal_outcome("pat", False, "scorer", evidence_ids=["own"])  # scorer's own
+    score(sv, "pat", False, by="manager")                               # counts...
+    assert sv._counted_outcomes("pat") == [False]
+    assert sv._counted_outcomes("pat", discounter="manager") == []      # ...not for manager
+    assert sv.discount_supported_by_record("pat")                       # poor record
+    assert not sv.discount_supported_by_record("pat", "manager")        # no record for manager
+    sv.record_credibility_discount("pat", "manager", "careless")
+    assert E.CREDIBILITY_DISCOUNTING in conditions(sv)
+
+
+# ===========================================================================
+# SCENE 12c — AN OUTCOME CITES WHAT EXISTS
+# Proves: record_signal_outcome refuses evidence ids that are not on record,
+# and records who scored it.
+# ===========================================================================
+
+def test_outcome_records_scorer_and_refuses_unknown_evidence(sv):
+    """
+    Enter:   sv   fixture
+    Exit:    passes if an unknown id is refused and a good outcome records
+             scored_by and its evidence
+    """
+    # PLAYERS IN THIS SCENE
+    #   rec   the recorded OutcomeRecord
+
+    with pytest.raises(TransitionRefused):
+        sv.record_signal_outcome("pat", True, "observer", evidence_ids=["missing"])
+    rec = score(sv, "pat", True, by="auditor")
+    assert rec.scored_by == "auditor" and rec.evidence_ids
+    assert sv.outcomes["pat"] == [rec]
 
 
 # ===========================================================================
@@ -451,46 +548,66 @@ def test_escalated_signal_cannot_close(sv):
 
 def test_resolution_requires_model_update(sv):
     """
-    resolve_review with an empty or whitespace model update is refused.
+    Rule 8, "What counts as an update": "An update changes at least one
+    registered element of the coordination model ... and names the element
+    it changes. A documented re-approval of existing practice, however
+    thorough, is not an update." A credibility-discounting review (a Rule 8
+    review) is refused with a blank update, and with an update that names
+    no changed element; it resolves once both are given.
 
     Enter:   sv   fixture
-    Exit:    passes if both attempts raise and the review stays unresolved
+    Exit:    passes if the three refusals raise, each is logged, and the
+             full update resolves the review with its elements recorded
     """
     # PLAYERS IN THIS SCENE
     #   update   a blank model update ("" or whitespace)
 
-    to_review(sv, "c", state=O.OFF_ENVELOPE)
+    sv.record_credibility_discount("kim", "manager", "difficult")
     for update in ("", "   "):
-        with pytest.raises(TransitionRefused):
-            sv.resolve_review("R1", "board", update)
+        with pytest.raises(TransitionRefused, match="Rule 8"):
+            sv.resolve_review("R1", "board", update, elements_changed=["channel"])
+    with pytest.raises(TransitionRefused, match="name the registered elements"):
+        sv.resolve_review("R1", "board", "we re-approve current practice")
     assert not sv.reviews[0].resolved
+    assert len([e for e in sv.audit.entries() if e.event == "REVIEW_RESOLUTION_REFUSED"]) == 3
+    sv.resolve_review("R1", "board", **UPDATE)
+    assert sv.reviews[0].resolved
+    assert sv.reviews[0].elements_changed == tuple(UPDATE["elements_changed"])
 
 
 # ===========================================================================
 # SCENE 15 — RECOVERY
-# Proves: Commitment State Machine, "escalated -> under_review (Rule 8
-# model update documented)"; after recovery the signal can be closed again.
+# Proves: Commitment State Machine, "escalated -> under_review (review
+# resolved as its trigger requires; suspension under an Emergency
+# Justification does not release it)"; after recovery the signal can be
+# closed again.
 # ===========================================================================
 
 def test_resolution_recovers_signals_to_under_review(sv):
     """
-    Resolving the review with a model update returns the signal to review.
+    Resolving the review by what its trigger requires returns the signal to
+    review. Here the trigger is a RECURRENCE group (Rule 8 update with its
+    level).
 
     Enter:   sv   fixture
-    Exit:    passes if the signal is under_review, the update is stored and
-             logged, and a closure then succeeds
+    Exit:    passes if the signals are under_review, the update is stored
+             and logged, and a closure then succeeds
     """
     # PLAYERS IN THIS SCENE
-    #   review   the off-envelope review
+    #   n        member number
+    #   review   the recurrence review
 
-    to_review(sv, "c", state=O.OFF_ENVELOPE)
-    sv.resolve_review("R1", "board", "add cold-weather test to the envelope")
+    for n in (1, 2, 3):
+        to_review(sv, f"m{n}", recurrence_group="g")
     review = sv.reviews[0]
+    assert sv.signals["m3"].state == S.ESCALATED
+    sv.resolve_review(review.review_id, "board", **UPDATE_AT_LEVEL)
     assert review.resolved and review.resolved_by == "board"
-    assert sv.signals["c"].state == S.UNDER_REVIEW
+    assert review.level == UPDATE_AT_LEVEL["level"]
+    assert sv.signals["m3"].state == S.UNDER_REVIEW
     assert "STRUCTURAL_REVIEW_RESOLVED" in sv.audit.events()
-    sv.attempt_closure("c", "vp", CUST)
-    assert sv.signals["c"].state == S.CLOSED_AUTHORITY
+    sv.attempt_closure("m3", "vp", CUST)
+    assert sv.signals["m3"].state == S.CLOSED_AUTHORITY
 
 
 # ===========================================================================
@@ -518,17 +635,21 @@ def test_signal_held_by_two_reviews_waits_for_both(sv):
     sv.open_review("m3", "eng")
     ids = [r.review_id for r in sv.reviews]
     assert len(ids) == 2
-    sv.resolve_review(ids[0], "board", "redesign the joint")
+    sv.resolve_review(ids[0], "board", **UPDATE_AT_LEVEL)
     assert sv.signals["m3"].state == S.ESCALATED
-    sv.resolve_review(ids[1], "board", "extend the validated envelope")
+    # The off-envelope review: evidence-based reclassification out of it.
+    add_ees(sv, "envelope-test")
+    sv.classify("m3", O.ELEVATED_UNCERTAINTY, "eng", ["envelope-test"])
+    sv.resolve_review(ids[1], "board", finding="tested; within the extended envelope")
     assert sv.signals["m3"].state == S.UNDER_REVIEW
 
 
 # ===========================================================================
 # SCENE 17 — NO RECOVERY THROUGH THE SIDE DOOR
 # Proves: Commitment State Machine, escalated -> under_review is the
-# recovery transition "(Rule 8 model update documented)". No other call may
-# take it, and it must not reset what the stability rule measures from.
+# recovery transition "(review resolved as its trigger requires)". No other
+# call may take it, and it must not reset what the stability rule measures
+# from.
 # ===========================================================================
 
 @pytest.mark.parametrize("call", ["open_review", "reenter_suppressed"])
@@ -580,12 +701,12 @@ def test_earned_discounts_do_not_count_toward_ap_g(sv):
 
     # --- A poor record: the first two discounts are earned ------------------
     for correct in (False, False):
-        sv.record_signal_outcome("pat", correct, "observer")
+        score(sv, "pat", correct)
     for label in ("careless", "unreliable"):
         sv.record_credibility_discount("pat", "manager", label)
     # --- The record improves: later outcomes beat earlier ones --------------
     for correct in (True, True, True):
-        sv.record_signal_outcome("pat", correct, "observer")
+        score(sv, "pat", correct)
     for label in ("difficult", "not a team player"):
         sv.record_credibility_discount("pat", "manager", label)
     assert sv.discounts["pat"] == 4 and sv.unsupported_discounts["pat"] == 2

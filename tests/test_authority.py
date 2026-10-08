@@ -50,6 +50,8 @@ THE PLAYBILL
 # cclf              Supervisor, Settings, Power, ExecutionClass, EvidenceKind,
 #                   TransitionRefused.
 # cclf.federation   AgentKey, Node, sign_grant.
+# stagehands        RULE3, the Rule 3 registration a passing acceptance needs;
+#                   attest(), the independent risk-evidence attestation.
 # ===========================================================================
 
 import pytest
@@ -57,6 +59,7 @@ import pytest
 from cclf import (EvidenceKind, ExecutionClass, Power, Settings, Supervisor,
                   TransitionRefused)
 from cclf.federation import AgentKey, Node, sign_grant
+from stagehands import RULE3, attest
 
 
 # ===========================================================================
@@ -70,6 +73,12 @@ TRAVELER = "traveler"
 A = "agent-a"
 B = "agent-b"
 SCOPE = "travel-booking"
+
+# RISK — the principal risk claim and Rule 3 registration a Rule 4 acceptance
+#   needs for the irreversible gate (October 2026), as accept_decision
+#   keywords. The fare quote cited with it is the claim's External Evidence
+#   Source.
+RISK = dict(risk_claim="the fare is as quoted and refundable", **RULE3)
 
 
 def booking(sv: Supervisor) -> None:
@@ -113,7 +122,7 @@ def test_handoff_is_not_authorization(sv):
     # B mistakes the handoff for authorization and accepts on A's word.
     with pytest.raises(TransitionRefused, match="does not hold authorize"):
         sv.accept_decision("book-flight", B, "agent-a recommended it",
-                           evidence_ids=["fare-quote"])
+                           evidence_ids=["fare-quote"], **RISK)
     assert sv.decisions["book-flight"].accepted_by is None
     # Then tries to purchase, with or without an override.
     for override in (None, "the user wants it booked"):
@@ -131,7 +140,8 @@ def test_handoff_is_not_authorization(sv):
 
 def test_recommender_cannot_authorize_either(sv):
     with pytest.raises(TransitionRefused):
-        sv.accept_decision("book-flight", A, "I researched it", evidence_ids=["fare-quote"])
+        sv.accept_decision("book-flight", A, "I researched it", evidence_ids=["fare-quote"],
+                           **RISK)
     # And B, holding only EXECUTE, cannot recommend.
     with pytest.raises(TransitionRefused):
         sv.recommend("book-flight", B, "looks good")
@@ -168,7 +178,9 @@ def test_delegation_cannot_exceed_what_was_granted(sv):
 
 def test_genuinely_authorized_booking_executes(sv):
     sv.recommend("book-flight", A, "cheapest refundable fare")
-    sv.accept_decision("book-flight", TRAVELER, "yes, book it", evidence_ids=["fare-quote"])
+    sv.accept_decision("book-flight", TRAVELER, "yes, book it", evidence_ids=["fare-quote"],
+                       **RISK)
+    attest(sv, "book-flight", root=TRAVELER)
     r = sv.request_execution("book-flight", B)
     assert r.permitted and not r.overridden, r.failures
 
@@ -178,7 +190,9 @@ def test_genuinely_authorized_booking_executes(sv):
 # ===========================================================================
 
 def test_override_cannot_supply_a_missing_power(sv):
-    sv.accept_decision("book-flight", TRAVELER, "yes, book it", evidence_ids=["fare-quote"])
+    sv.accept_decision("book-flight", TRAVELER, "yes, book it", evidence_ids=["fare-quote"],
+                       **RISK)
+    attest(sv, "book-flight", root=TRAVELER)
     # A was never given EXECUTE; an override does not change that.
     r = sv.request_execution("book-flight", A, override_rationale="I'll just do it")
     assert not r.permitted and "does not hold execute" in r.failures[0]
@@ -208,7 +222,7 @@ def test_cross_node_handoff_is_not_authorization():
     # B mistakes the verified, signed handoff for authorization.
     with pytest.raises(TransitionRefused):
         booker.sv.accept_decision("book-flight", B, "research-node recommended it",
-                                  evidence_ids=["fare-quote"])
+                                  evidence_ids=["fare-quote"], **RISK)
     # A even signs a grant of AUTHORIZE: the signature is genuine, the
     # power is not A's to give.
     with pytest.raises(TransitionRefused, match="does not hold authorize"):
@@ -219,7 +233,8 @@ def test_cross_node_handoff_is_not_authorization():
     booker.receive_grant(sign_grant(keys[TRAVELER], B, "booking-node", Power.AUTHORIZE, SCOPE),
                          by="ops")
     booker.sv.accept_decision("book-flight", B, "traveler authorized bookings",
-                              evidence_ids=["fare-quote"])
+                              evidence_ids=["fare-quote"], **RISK)
+    attest(booker.sv, "book-flight", root=TRAVELER)
     assert booker.sv.request_execution("book-flight", B).permitted
 
 

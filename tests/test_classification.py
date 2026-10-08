@@ -29,7 +29,8 @@ What the spec requires, and what each scene checks:
 THE PLAYBILL
     Scene 1   test_nominal_without_evidence_is_refused
     Scene 2   test_nominal_with_non_ees_evidence_is_refused   (parametrized, 3 runs)
-    Scene 3   test_nominal_with_registrant_evidence_is_refused
+    Scene 3   test_nominal_with_classifier_evidence_is_refused
+    Scene 3b  test_nominal_with_registrant_evidence_classified_by_another_is_accepted
     Scene 4   test_nominal_with_ees_evidence_is_accepted
     Scene 5   test_non_nominal_states_are_applied_as_given    (parametrized, 4 runs)
     Scene 6   test_classification_moves_registered_to_classified
@@ -145,19 +146,44 @@ def test_nominal_with_non_ees_evidence_is_refused(sv, kind):
 
 # ===========================================================================
 # SCENE 3 — MARKING ONE'S OWN HOMEWORK
-# Proves: evidence produced by the signal's registrant does not validate a
-# nominal classification (Layer 2, External Evidence Source (EES)).
+# Proves: evidence produced by the CLASSIFYING agent does not validate their
+# own nominal classification (Layer 2, External Evidence Source: the
+# producer is not "the registering or reclassifying agent, for a reversal
+# path or a classification").
 # ===========================================================================
 
-def test_nominal_with_registrant_evidence_is_refused(sv):
+def test_nominal_with_classifier_evidence_is_refused(sv):
     """
-    A direct measurement produced by the registrant does not validate nominal.
+    A direct measurement produced by the classifier does not validate nominal.
 
     Enter:   sv   fixture
     Exit:    passes if elevated_uncertainty is applied
     """
-    add_ees(sv, "e1", ["s"], produced_by="engineer")
+    add_ees(sv, "e1", ["s"], produced_by="manager")
     assert sv.classify("s", O.NOMINAL, "manager", ["e1"]) == O.ELEVATED_UNCERTAINTY
+
+
+# ===========================================================================
+# SCENE 3b — THE REGISTRANT'S MEASUREMENT, SOMEONE ELSE'S CLAIM
+# Proves: the registrant is no longer excluded as such. Under the one EES
+# definition, a measurement the registrant took can validate a nominal
+# classification another agent makes ("A common cause in the world is not
+# a shared error").
+# ===========================================================================
+
+def test_nominal_with_registrant_evidence_classified_by_another_is_accepted(sv):
+    """
+    Setting the stage: evidence produced by the registrant ("engineer").
+    The action: "manager" classifies nominal citing it. The verdict: nominal
+    is applied, and the classification record names the classifier.
+
+    Enter:   sv   fixture
+    Exit:    passes if nominal is applied and recorded as manager's
+    """
+    add_ees(sv, "e1", ["s"], produced_by="engineer")
+    assert sv.classify("s", O.NOMINAL, "manager", ["e1"]) == O.NOMINAL
+    assert sv.signals["s"].classification_records[-1].by == "manager"
+    assert sv.signals["s"].classification_records[-1].evidence_ids == ("e1",)
 
 
 # ===========================================================================

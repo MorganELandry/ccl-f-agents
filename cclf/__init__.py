@@ -60,9 +60,11 @@ from .graph import build_graph, replay
 from .statemachine import TRANSITIONS, check_transition
 from .supervisor import GateResult, Settings, StructuralReview, Supervisor, TransitionRefused
 from .types import (
-    Architecture, ClosureRecord, ClosureType, CommitmentState, Decision,
+    AgentKind, Architecture, ClassificationRecord, ClosureRecord, ClosureType,
+    CommitmentState, Decision, EmergencyConsequence, EmergencyJustification,
     EscalationCondition, Evidence, EvidenceKind, ExecutionClass, ExitRecord,
-    ExitType, Grant, LegalSubtype, OperationalState, Power, Referent, Signal, SignalType,
+    ExitType, Grant, LegalSubtype, OpenLoopAuthorization, OperationalState, OutcomeRecord,
+    Power, Referent, RiskAttestation, Signal, SignalType,
 )
 
 
@@ -79,7 +81,9 @@ __all__ = [
     "Supervisor", "TransitionRefused", "Architecture", "ClosureRecord", "ClosureType",
     "CommitmentState", "Decision", "EscalationCondition", "Evidence", "EvidenceKind",
     "ExecutionClass", "ExitRecord", "ExitType", "LegalSubtype", "OperationalState",
-    "Referent", "Signal", "SignalType", "Grant", "Power",
+    "Referent", "Signal", "SignalType", "Grant", "Power", "AgentKind",
+    "ClassificationRecord", "EmergencyConsequence", "EmergencyJustification",
+    "OpenLoopAuthorization", "OutcomeRecord", "RiskAttestation",
 ]
 
 # EXEUNT — end of file.

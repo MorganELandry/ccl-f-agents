@@ -11,10 +11,14 @@
  *   - the Layer 0 voids the runtime checks: AP-A (no steward), AP.1b (no
  *     successor) and AP-F (captured channel);
  *   - Closure Chain (Layer 2): an evidence closure counts only if every
- *     loop its qualifying evidence depends on is itself chain-sound;
+ *     loop that any evidence it cites depends on is itself chain-sound;
  *   - the decision-level independence rules (Layer 4): the evidence that a
  *     reversal path was tested (Execution Class Assignment) and the
- *     decision's External Evidence Source.
+ *     External Evidence Source cited in the decision's Rule 4 acceptance.
+ * One definition of External Evidence Source serves all three: its
+ * producer is neither the agent making the claim (the closing agent, the
+ * class-setter, the acceptor), nor the agent accepting the decision, nor a
+ * process under evaluation. The registrant is not excluded as such.
  * The Alloy Analyzer searches every small instance (up to the scope in each
  * `check`) for a counterexample to each assertion, and confirms with `run`
  * that each closure type and each void can actually occur.
@@ -105,14 +109,16 @@ pred novel[e: Evidence, s: Signal] {
   gt[e.at, s.registeredAt]
 }
 
-// External Evidence Source: an eligible kind, produced by neither the
-// process under evaluation nor the signal's registrant.
-pred ees[e: Evidence, s: Signal] {
+// External Evidence Source for a closure: an eligible kind, produced by
+// neither the agent making the claim (the closing agent) nor the process
+// under evaluation. The registrant may produce it: a registrant's own
+// measurement can close a loop someone else closes.
+pred ees[e: Evidence, c: Closure] {
   e.kind in EESKinds
-  e.producer not in s.evaluated + s.registrant
+  e.producer not in c.closer + c.signal.evaluated
 }
 
-pred qualifies[c: Closure] { some e: c.cites | novel[e, c.signal] and ees[e, c.signal] }
+pred qualifies[c: Closure] { some e: c.cites | novel[e, c.signal] and ees[e, c] }
 
 pred roleSwitch[c: Closure] {
   c.closer = c.signal.registrant
@@ -143,18 +149,18 @@ assert NonEESKindsNeverClose {
       implies c.ctype != EvidenceClosure
 }
 
-// The process under evaluation cannot close its own signal by evidence it
-// produced itself.
+// Neither the closing agent nor the process under evaluation can close a
+// signal by evidence it produced itself.
 assert NoSelfCertification {
   all c: Closure |
-    c.cites.producer in (c.signal.evaluated + c.signal.registrant)
+    c.cites.producer in (c.signal.evaluated + c.closer)
       implies c.ctype != EvidenceClosure
 }
 
 // An evidence closure always rests on at least one independent producer.
 assert EvidenceClosureHasIndependentSource {
   all c: Closure | c.ctype = EvidenceClosure implies
-    some e: c.cites | e.producer not in c.signal.evaluated + c.signal.registrant
+    some e: c.cites | e.producer not in c.signal.evaluated + c.closer
 }
 
 // Role-switch closure is only ever the registrant closing their own signal.
@@ -197,22 +203,25 @@ assert UncapturedMeansIndependentReporter {
 // SCENE 4 - CLOSURE CHAIN
 // The runtime computes chain soundness as a least fixed point: start with
 // no sound loops, and repeatedly add every loop whose current closure is an
-// evidence closure with at least one qualifying item whose upstream loops
-// are all sound already. Step mirrors that iteration; with at least one
-// more Step than there are Signals, the last Step holds the answer.
+// evidence closure and EVERY item of whose cited evidence has its upstream
+// loops all sound already ("Citing an item is relying on it, so every
+// cited item is load-bearing"). Step mirrors that iteration; with at least
+// one more Step than there are Signals, the last Step holds the answer.
+// Exits are not modeled here, so "resolved" upstream means sound; the
+// TLA+ model also counts an upstream supersession.
 // ===========================================================================
 
 sig Step { snd: set Signal }
 
 // The qualifying evidence of a signal's current closure (novel and EES).
 fun qual[s: Signal] : set Evidence {
-  { e: s.current.cites | novel[e, s] and ees[e, s] }
+  { e: s.current.cites | novel[e, s] and ees[e, s.current] }
 }
 
 // One round of the iteration: loops supported by the set `known`.
 fun grow[known: set Signal] : set Signal {
   { s: Signal | s.current.ctype = EvidenceClosure
-                and some e: qual[s] | e.dependsOn in known }
+                and all e: s.current.cites | e.dependsOn in known }
 }
 
 fact iteration {
@@ -232,31 +241,39 @@ assert SoundIsAFixedPoint { grow[Sound] = Sound }
 // other self-supporting structures never count.
 assert SoundIsLeast { all c: Candidate | grow[c.xs] in c.xs implies Sound in c.xs }
 
-// A loop whose every qualifying item depends on the loop itself is never
-// sound ("A loop cannot be its own upstream").
+// A loop citing any item that depends on the loop itself is never sound
+// ("A loop cannot be its own upstream").
 assert SelfSupportNeverSound {
-  all s: Signal | (all e: qual[s] | s in e.dependsOn) implies s not in Sound
+  all s: Signal | (some e: s.current.cites | s in e.dependsOn) implies s not in Sound
 }
 
-// Two loops each resting only on the other are never sound.
+// Two loops each citing evidence that rests on the other are never sound.
 assert MutualSupportNeverSound {
   all disj s, t: Signal |
-    ((all e: qual[s] | t in e.dependsOn) and (all e: qual[t] | s in e.dependsOn))
+    ((some e: s.current.cites | t in e.dependsOn) and (some e: t.current.cites | s in e.dependsOn))
       implies (s + t) & Sound = none
 }
 
 // Evidence resting on a loop not closed by evidence makes nothing sound:
-// if every qualifying item depends on such a loop, the closure doesn't count.
+// if any cited item depends on such a loop, the closure doesn't count.
 assert NonEvidenceUpstreamBreaksTheChain {
   all s: Signal |
-    (all e: qual[s] | some u: e.dependsOn | u.current.ctype != EvidenceClosure)
+    (some e: s.current.cites | some u: e.dependsOn | u.current.ctype != EvidenceClosure)
       implies s not in Sound
 }
 
-// Everything sound is closed by evidence, all the way up.
+// Everything sound is closed by evidence, and every item it cites rests
+// only on sound loops, all the way up.
 assert SoundAllTheWayUp {
   all s: Sound | s.current.ctype = EvidenceClosure
-    and some e: qual[s] | e.dependsOn in Sound
+    and all e: s.current.cites | e.dependsOn in Sound
+}
+
+// Weakest link: one clean item does not carry the others. A loop citing
+// any item that rests on a loop not sound is not sound, however good its
+// other items are (the rule before October 2026 needed only one item).
+assert OneCleanItemDoesNotCarryTheRest {
+  all s: Signal | (some e: s.current.cites | some e.dependsOn - Sound) implies s not in Sound
 }
 
 // ===========================================================================
@@ -265,9 +282,11 @@ assert SoundAllTheWayUp {
 // a tested reversal path, shown by "evidence of an eligible kind produced
 // by neither the agent who registered or reclassified the decision, nor the
 // agent accepting it, nor a process under evaluation in its loops".
-// Execution Gates: the decision's External Evidence Source comes from its
-// loops' chain-sound evidence closures or its Rule 4 acceptance, produced by
-// neither a process under evaluation in its loops nor the accepting agent.
+// Execution Gates: the decision's External Evidence Source is cited in its
+// Rule 4 acceptance, for the principal risk claim, and produced by neither
+// a process under evaluation in its loops nor the accepting agent (the
+// claimant). "Evidence elsewhere in the decision's support, in its loops'
+// closures, does not substitute."
 // ===========================================================================
 
 abstract sig Class {}
@@ -294,10 +313,10 @@ fun applied[d: Decision] : one Class {
   (d.declared = Irreversible or reversalSupported[d]) => d.declared else Irreversible
 }
 
-// The decision's support: evidence cited in its acceptance, plus the
-// qualifying evidence of its loops' chain-sound evidence closures.
+// The decision's support for its principal risk claim: the evidence cited
+// in its acceptance, and nothing else.
 fun support[d: Decision] : set Evidence {
-  d.acceptanceEvidence + { e: Evidence | some s: d.loops & Sound | e in qual[s] }
+  d.acceptanceEvidence
 }
 
 pred decisionEES[d: Decision] {
@@ -332,11 +351,10 @@ assert AcceptorCannotSupplyTheEES {
   all d: Decision | support[d].producer in d.acceptor implies not decisionEES[d]
 }
 
-// Evidence inside a closure that isn't chain-sound never supplies it: with
-// nothing cited in the acceptance and no sound loop, there is none.
-assert UnsoundClosuresNeverSupplyTheEES {
-  all d: Decision | (no d.acceptanceEvidence and no d.loops & Sound)
-    implies not decisionEES[d]
+// Evidence in the loops' closures never supplies it, sound or not: with
+// nothing cited in the acceptance, there is none.
+assert LoopClosuresNeverSupplyTheEES {
+  all d: Decision | no d.acceptanceEvidence implies not decisionEES[d]
 }
 
 // ===========================================================================
@@ -356,11 +374,12 @@ check SelfSupportNeverSound                 for 4 but 4 Time, exactly 5 Step
 check MutualSupportNeverSound               for 4 but 4 Time, exactly 5 Step
 check NonEvidenceUpstreamBreaksTheChain     for 4 but 4 Time, exactly 5 Step
 check SoundAllTheWayUp                      for 4 but 4 Time, exactly 5 Step
+check OneCleanItemDoesNotCarryTheRest       for 4 but 4 Time, exactly 5 Step
 check LowerClassNeedsIndependentProof       for 4 but 4 Time, exactly 5 Step
 check NoSelfCertifiedReversal               for 4 but 4 Time, exactly 5 Step
 check NonEESNeverSupportsReversal           for 4 but 4 Time, exactly 5 Step
 check AcceptorCannotSupplyTheEES            for 4 but 4 Time, exactly 5 Step
-check UnsoundClosuresNeverSupplyTheEES      for 4 but 4 Time, exactly 5 Step
+check LoopClosuresNeverSupplyTheEES        for 4 but 4 Time, exactly 5 Step
 
 // Non-vacuity: each closure type and each void can actually occur.
 run SomeEvidenceClosure   { some c: Closure | c.ctype = EvidenceClosure }   for 3
@@ -371,7 +390,9 @@ run SomeSuccessionVoid    { some m: FailureMode | ap1b[m] and not apA[m] }  for 
 run SomeTwoLevelChain     { some s: Sound | some qual[s].dependsOn & Sound } for 4 but 4 Time, exactly 5 Step
 run SomeUnsoundEvidenceClosure { some s: Signal | s.current.ctype = EvidenceClosure and s not in Sound } for 4 but 4 Time, exactly 5 Step
 run SomeLowerClassApplied { some d: Decision | applied[d] = Routine } for 4 but 4 Time, exactly 5 Step
-run SomeDecisionWithEES { some d: Decision | decisionEES[d] and no d.acceptanceEvidence } for 4 but 4 Time, exactly 5 Step
+run SomeDecisionWithEES { some d: Decision | decisionEES[d] } for 4 but 4 Time, exactly 5 Step
+run SomeRegistrantEvidenceClosure { some c: Closure | c.ctype = EvidenceClosure and c.closer != c.signal.registrant and c.cites.producer = c.signal.registrant } for 4 but 4 Time
+run SomeCleanItemNotEnough { some s: Signal | s.current.ctype = EvidenceClosure and s not in Sound and some e: qual[s] | no e.dependsOn } for 4 but 4 Time, exactly 5 Step
 run SomeDeclaredLowerGatedIrreversible { some d: Decision | d.declared = Routine and applied[d] = Irreversible } for 4 but 4 Time, exactly 5 Step
 
 // EXEUNT - end of model.

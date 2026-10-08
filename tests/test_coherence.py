@@ -50,14 +50,15 @@ READER'S NOTE — pytest.approx
 # pytest            fixtures and approx.
 # cclf              OperationalState, SignalType, Supervisor.
 # cclf.supervisor   COHERENCE_WEIGHTS, the code's weight table.
-# stagehands        CUST, TECH, PROCESS, to_review, add_ees, decision.
+# stagehands        CUST, TECH, PROCESS, UPDATE_AT_LEVEL, to_review, add_ees,
+#                   decision.
 # ===========================================================================
 
 import pytest
 
 from cclf import OperationalState, SignalType, Supervisor
 from cclf.supervisor import COHERENCE_WEIGHTS
-from stagehands import CUST, PROCESS, TECH, add_ees, decision, to_review
+from stagehands import CUST, PROCESS, TECH, UPDATE_AT_LEVEL, add_ees, decision, to_review
 
 
 # ===========================================================================
@@ -192,12 +193,12 @@ def test_healthy_decision_scores_one(sv):
 
 def test_open_loops_factor(sv):
     """
-    Implementation-decision test (D3: factor = 1 - open-or-locked / signals).
-    One of two open gives 0.5; after an override locks the constraint, it
-    still counts as open.
+    Implementation-decision test (D3: factor = 1 - open-or-latched /
+    signals). One of two open gives 0.5; after an override latches the
+    constraint into executed_open, it still counts as carried open.
 
     Enter:   sv   fixture
-    Exit:    passes if the factor is 0.5 before and after the lock
+    Exit:    passes if the factor is 0.5 before and after the latch
     """
     to_review(sv, "c")
     to_review(sv, "u", signal_type=U)
@@ -205,29 +206,34 @@ def test_open_loops_factor(sv):
     decision(sv, "d", ["c", "u"])
     assert factors(sv)["open_loops"] == 0.5
     sv.request_execution("d", "risk-officer", override_rationale="go")
-    assert sv.signals["c"].state.value == "trajectory_lock"
+    assert sv.signals["c"].state.value == "executed_open"
     assert factors(sv)["open_loops"] == 0.5
 
 
 # ===========================================================================
 # SCENE 5 — CLASSIFICATION STABILITY
-# Proves: reclassifying a signal during review lowers the stability factor.
+# Proves: reclassifying a signal toward less caution during review lowers the
+# stability factor; toward more caution does not.
 # ===========================================================================
 
 def test_classification_stability_factor(sv):
     """
     Implementation-decision test (D3/D8: share of signals not reclassified
-    to a different state since review opened). Reclassifying one of two
+    toward a less cautious state since their first review opened). Raising
+    caution on one signal leaves it at 1.0; lowering caution on one of two
     signals halves it.
 
     Enter:   sv   fixture
-    Exit:    passes if the factor goes from 1.0 to 0.5
+    Exit:    passes if the factor stays 1.0 after a raise and goes to 0.5
+             after a lowering
     """
-    to_review(sv, "a", signal_type=U)
+    to_review(sv, "a", signal_type=U, state=OperationalState.EXPERIMENTAL)
     to_review(sv, "b", signal_type=U)
     decision(sv, "d", ["a", "b"])
     assert factors(sv)["classification_stability"] == 1.0
-    sv.classify("a", OperationalState.EXPERIMENTAL, "eng")
+    sv.classify("b", OperationalState.CONTAINMENT, "eng")          # toward caution
+    assert factors(sv)["classification_stability"] == 1.0
+    sv.classify("a", OperationalState.ELEVATED_UNCERTAINTY, "eng")  # less caution
     assert factors(sv)["classification_stability"] == 0.5
 
 
@@ -280,7 +286,7 @@ def test_recurrence_pressure_factor(sv):
         sv.link_signal("d", f"m{n}", "clerk")
         seen.append(factors(sv)["recurrence_pressure"])
     assert seen[0] > seen[1] > seen[2] == 0.0
-    sv.resolve_review("R1", "board", "redesign")
+    sv.resolve_review("R1", "board", **UPDATE_AT_LEVEL)
     assert factors(sv)["recurrence_pressure"] == 1.0
 
 

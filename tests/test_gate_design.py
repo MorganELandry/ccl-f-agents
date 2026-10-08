@@ -19,11 +19,13 @@ The decisions under test, in the changelog's own words:
   2. "aggregation across a decision's loops is by type" — weakest link for
      constraint and anomaly loops, the minimum evidence closure ratio for
      uncertainty, dissent, classification and framing loops;
-  3. "irreversible execution requires at least one External Evidence Source
-     somewhere in the decision's support, including evidence cited in its
-     Rule 4 acceptance";
-  4. Closure Chain: "an evidence closure counts as evidence only if its
-     evidence chain is evidence-closed all the way up".
+  3. irreversible execution requires "at least one External Evidence
+     Source for the principal risk claim", cited in the Rule 4 acceptance
+     (revised October 2026: evidence in the loops' closures no longer
+     substitutes);
+  4. Closure Chain: an evidence closure is chain-sound "only if every item
+     of evidence it cites has every upstream loop itself resolved ... all
+     the way up" (revised October 2026 from "at least one item").
 
 How to read a scene's verdict: GateResult.failures is a list of strings.
 Each gate requirement has its own message prefix (see DRAMATIS PERSONAE).
@@ -37,9 +39,15 @@ THE PLAYBILL
                   close_by_authority(), close_by_role_switch()
     Scenes 5-10   constraint and anomaly loops: weakest link
     Scenes 11-17  the other loop types: the minimum evidence closure ratio
-    Scenes 18-20  exits: which exit types count as resolved
-    Scenes 21-26  decision-level External Evidence Source
-    Scenes 27-35  the Closure Chain
+    Scenes 16     no other-type signals; an open one counts against the ratio
+                  and is "left open"; which exits close one (four tests)
+    Scenes 18-20  exits: only a supersession shown by an EES resolves a
+                  constraint
+    Scenes 21-26  the principal risk claim and its External Evidence Source;
+                  the acceptor's own evidence resolves nothing for them
+    Scenes 27-35  the Closure Chain (31: every cited item is load-bearing,
+                  three tests; 31b: superseded upstream; 34b: late
+                  dependency)
     Scene 36      overrides still work
     Scene 37      outside the irreversible gate: the coherence score
 
@@ -86,7 +94,8 @@ from cclf import (
     Settings, SignalType, Supervisor, TransitionRefused,
 )
 from stagehands import (
-    CUST, INDEPENDENT_LAB, PROCESS, TECH, add_ees, add_non_ees, decision, entries, to_review,
+    CUST, INDEPENDENT_LAB, PROCESS, RULE3, TECH, add_ees, add_non_ees, attest, decision,
+    entries, to_review,
 )
 
 
@@ -102,12 +111,25 @@ CONSTRAINT_MSG = "constraint/anomaly loops not evidence-closed"
 #   (which now covers uncertainty, dissent, classification, framing only).
 RATIO_MSG = "evidence closure ratio "
 
-# EES_MSG — the failure when the decision's support holds no EES.
-EES_MSG = "no External Evidence Source in the decision's support"
+# EES_MSG — the failure when the Rule 4 acceptance names a principal risk
+#   claim but cites no External Evidence Source for it (October 2026).
+EES_MSG = "no External Evidence Source for the principal risk claim"
 
-# NEW_MSGS — all three new prefixes, for the override scene's check that a
-#   decision fails only the new requirements.
-NEW_MSGS = (CONSTRAINT_MSG, RATIO_MSG, EES_MSG)
+# RISK_MSG — the failure when the Rule 4 acceptance names no principal risk
+#   claim at all.
+RISK_MSG = "no principal risk claim named in the Rule 4 acceptance"
+
+# OPEN_MSG — prefix of the failure when a loop of the other types is left
+#   open ("none left open").
+OPEN_MSG = "other loops left open"
+
+# NEW_MSGS — the gate-design prefixes, for the override scene's check that a
+#   decision fails only these requirements.
+NEW_MSGS = (CONSTRAINT_MSG, RATIO_MSG, EES_MSG, RISK_MSG, OPEN_MSG)
+
+# RISK — a principal risk claim and Rule 3 registration, as accept_decision
+#   keywords, for scenes that accept by hand.
+RISK = dict(risk_claim="the joint seals at launch temperature", **RULE3)
 
 # REVIEWER — an agent who is neither the registrant ("engineer") nor the
 #   evaluated process, so a closure by them with no EES is an authority closure.
@@ -122,7 +144,9 @@ DIRECTOR = "director"
 #   is not a fair way to stage it.
 OTHER_TYPES = [SignalType.UNCERTAINTY, SignalType.DISSENT, SignalType.CLASSIFICATION]
 
-# CLOSED_EXITS — exit types whose Loop State After is closed.
+# CLOSED_EXITS — exit types whose Loop State After is closed. They close a
+#   loop of the other types; of them, only a superseded exit with an
+#   External Evidence Source resolves a constraint or anomaly loop.
 CLOSED_EXITS = [ExitType.TERMINAL, ExitType.SUPERSEDED]
 
 # OPEN_EXITS — exit types the spec names as Loop State After open, plus
@@ -376,10 +400,12 @@ def test_all_constraint_and_anomaly_loops_evidence_closed_meet_requirement():
 @pytest.mark.parametrize("weak_type", OTHER_TYPES, ids=lambda t: t.name)
 def test_one_authority_closed_other_loop_passes_the_ratio(weak_type):
     """
-    Spec: "The remaining loop types — uncertainty, dissent, classification,
-    framing — are held to a minimum evidence closure ratio instead" and
-    "These loop types are closer to a budget than to a list of distinct
-    failure modes, so a ratio is the right test."
+    Spec (Reversibility Logic): "The remaining loop types — uncertainty,
+    dissent, classification, framing — may be closed by any closure type,
+    but enough of them by evidence to meet a minimum evidence closure
+    ratio" and (Execution Gates) "These loop types are closer to a budget
+    than to a list of distinct failure modes, so a ratio is the right test
+    of how they were closed."
 
     Setting the stage: one loop of `weak_type` closed by authority, two
     uncertainty loops evidence-closed: 2 of 3 is at least the default 0.5.
@@ -407,9 +433,9 @@ def test_one_authority_closed_other_loop_passes_the_ratio(weak_type):
 
 def test_below_ratio_fails_with_ratio_message():
     """
-    Spec: "among the closures of the decision's uncertainty, dissent,
-    classification, and framing signals, the share that are chain-sound
-    evidence closures meets the domain-configured minimum."
+    Spec: "among the decision's uncertainty, dissent, classification, and
+    framing signals, the share closed by chain-sound evidence closure meets
+    the domain-configured minimum (one half by default)".
 
     Setting the stage: two uncertainty loops closed by authority and one by
     evidence: 1 of 3 is below 0.5. The verdict: the ratio failure appears.
@@ -436,8 +462,8 @@ def test_below_ratio_fails_with_ratio_message():
 
 def test_ratio_exactly_at_minimum_is_met():
     """
-    Spec: "the share that are chain-sound evidence closures meets the
-    domain-configured minimum." Read literally, "meets" includes equality.
+    Spec: "the share closed by chain-sound evidence closure meets the
+    domain-configured minimum". Read literally, "meets" includes equality.
 
     Setting the stage: one authority and one evidence closure of uncertainty
     loops: 1 of 2 = 0.5, the default minimum. The verdict: no ratio failure.
@@ -515,28 +541,100 @@ def test_constraint_authority_closure_does_not_count_against_ratio():
 
 
 # ===========================================================================
-# SCENE 16 — NOTHING TO MEASURE
-# Proves: with no closures of the other loop types, the ratio is met.
+# SCENE 16 — NOTHING TO MEASURE, AND AN OPEN LOOP IS NOT NOTHING
+# Proves: with no signals of the other loop types, the requirement is met;
+# an uncertainty loop still under review counts against the ratio and is
+# "left open".
 # ===========================================================================
 
-def test_no_other_type_closures_means_ratio_met():
+def test_no_other_type_signals_means_requirement_met():
     """
-    Spec: "With no such closures, there is nothing to measure and the
-    requirement is met."
+    Spec: "With no such signals, the requirement is met."
 
-    Setting the stage: an evidence-closed constraint plus an uncertainty
-    loop still under review (so it has no closure). The verdict: no ratio
-    failure.
+    Setting the stage: one evidence-closed constraint and nothing else.
+    The verdict: neither the ratio nor the left-open failure.
     """
     # PLAYERS IN THIS SCENE
     #   sv, result   as in Scene 5
     sv = Supervisor()
     to_review(sv, "c1")
-    to_review(sv, "u1", SignalType.UNCERTAINTY)
     close_by_evidence(sv, "c1", "e1")
-    decision(sv, "d1", ["c1", "u1"])
+    decision(sv, "d1", ["c1"])
     result = sv.request_execution("d1", DIRECTOR)
     assert failures_with(result, RATIO_MSG) == []
+    assert failures_with(result, OPEN_MSG) == []
+
+
+def test_open_other_loop_counts_against_ratio_and_is_left_open():
+    """
+    Spec: "A loop left open counts against the ratio, so leaving loops
+    unclosed never improves it" and "none remains open: each is closed, by
+    whatever closure type, or has exited as superseded."
+
+    Setting the stage: "u1" evidence-closed; "u2" and "u3" still under
+    review. Counting only closures would give 1 of 1; counting every signal
+    gives 1 of 3. The verdict: the ratio failure (0.33) and the left-open
+    failure naming u2 and u3.
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv, result   as in Scene 5
+    #   sid          each uncertainty signal id
+    #   msgs         the left-open failure strings
+    sv = Supervisor()
+    for sid in ("u1", "u2", "u3"):
+        to_review(sv, sid, SignalType.UNCERTAINTY)
+    close_by_evidence(sv, "u1", "e1")
+    decision(sv, "d1", ["u1", "u2", "u3"])
+    result = sv.request_execution("d1", DIRECTOR)
+    assert failures_with(result, RATIO_MSG) == ["evidence closure ratio 0.33 below 0.50"]
+    msgs = failures_with(result, OPEN_MSG)
+    assert len(msgs) == 1 and "u2" in msgs[0] and "u3" in msgs[0] and "u1" not in msgs[0]
+
+
+def test_ratio_met_but_one_loop_open_still_fails():
+    """
+    Spec: the ratio and "none left open" are separate conditions.
+
+    Setting the stage: "u1" evidence-closed, "u2" under review: 1 of 2
+    meets 0.5. The verdict: no ratio failure, but u2 is left open.
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv, result   as in Scene 5
+    sv = Supervisor()
+    to_review(sv, "u1", SignalType.UNCERTAINTY)
+    to_review(sv, "u2", SignalType.UNCERTAINTY)
+    close_by_evidence(sv, "u1", "e1")
+    decision(sv, "d1", ["u1", "u2"])
+    result = sv.request_execution("d1", DIRECTOR)
+    assert failures_with(result, RATIO_MSG) == []
+    assert failures_with(result, OPEN_MSG) == ["other loops left open: ['u2']"]
+
+
+@pytest.mark.parametrize("exit_type, closes", [
+    (ExitType.TERMINAL, False), (ExitType.SUPERSEDED, True),
+    (ExitType.TIMEOUT, False), (ExitType.DEFERRED, False), (ExitType.AMBIGUITY, False),
+], ids=lambda v: v.name if isinstance(v, ExitType) else str(v))
+def test_other_loop_exits_that_close_it(exit_type, closes):
+    """
+    Spec: "each is closed, by whatever closure type, or has exited as
+    superseded. A loop exited as terminal counts as open for this test,
+    since the exit records the loop's open state rather than resolving
+    it." A terminal, timed-out, deferred or ambiguity exit leaves it open.
+
+    Setting the stage: "u1" evidence-closed, "u2" exited by `exit_type`.
+    The verdict: the left-open failure appears exactly when the exit does
+    not close the loop.
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv, result   as in Scene 5
+    sv = Supervisor()
+    to_review(sv, "u1", SignalType.UNCERTAINTY)
+    to_review(sv, "u2", SignalType.UNCERTAINTY)
+    close_by_evidence(sv, "u1", "e1")
+    sv.exit("u2", exit_type, "steward", "leaving", open_loop_state="noted")
+    decision(sv, "d1", ["u1", "u2"])
+    result = sv.request_execution("d1", DIRECTOR)
+    assert (failures_with(result, OPEN_MSG) == []) is closes
 
 
 # ===========================================================================
@@ -569,46 +667,63 @@ def test_chain_unsound_evidence_closure_counts_as_non_evidence_in_ratio():
 
 
 # ===========================================================================
-# SCENE 18 — EXITS THAT CLOSE THE LOOP
-# Proves: a constraint that exited TERMINAL or SUPERSEDED meets the
-# requirement.
+# SCENE 18 — THE ONE EXIT THAT RESOLVES A CONSTRAINT
+# Proves: a constraint superseded with an External Evidence Source meets
+# the requirement; a terminal exit, or a supersession without such
+# evidence, does not.
 # ===========================================================================
 
-@pytest.mark.parametrize("exit_type", CLOSED_EXITS, ids=lambda t: t.name)
-def test_constraint_exited_with_closed_loop_state_meets_requirement(exit_type):
+@pytest.mark.parametrize("exit_type, evidence_by, meets", [
+    (ExitType.SUPERSEDED, INDEPENDENT_LAB, True),   # supersession shown by an EES
+    (ExitType.SUPERSEDED, None, False),             # no evidence cited
+    (ExitType.SUPERSEDED, "steward", False),        # the exiting agent's own evidence
+    (ExitType.TERMINAL, INDEPENDENT_LAB, False),    # terminal never resolves it
+], ids=["superseded-ees", "superseded-bare", "superseded-own-evidence", "terminal"])
+def test_constraint_exit_meets_requirement_only_superseded_with_ees(exit_type, evidence_by,
+                                                                    meets):
     """
     Spec: "every constraint and anomaly signal the decision depends on is
-    closed by a chain-sound evidence closure, or has exited by a type whose
-    Loop State After is closed (terminal, superseded)."
+    closed by a chain-sound evidence closure, or has exited as superseded
+    with an External Evidence Source showing that the context that
+    generated it no longer exists ... That includes the terminal, timeout,
+    whistleblower, and legal exits: each ends a loop without resolving the
+    hazard it named, and a terminal exit needs no evidence at all."
 
-    The decision's support still holds no EES here, so the EES failure is
-    expected; this scene checks only the constraint requirement.
+    Setting the stage: "c1" exits by `exit_type`, citing evidence produced
+    by `evidence_by` (none if None); the exiting agent is "steward", the
+    claimant. The verdict: the constraint failure is absent exactly when
+    the exit is a supersession with an EES.
     """
     # PLAYERS IN THIS SCENE
     #   sv, result   as in Scene 5
+    #   cited        the evidence ids cited with the exit
     sv = Supervisor()
     to_review(sv, "c1")
-    sv.exit("c1", exit_type, "steward", "the loop is finished",
-            open_loop_state="no open work remains")
+    cited = []
+    if evidence_by:
+        add_ees(sv, "context-gone", produced_by=evidence_by)
+        cited = ["context-gone"]
+    sv.exit("c1", exit_type, "steward", "the context no longer exists",
+            open_loop_state="no open work remains", evidence_ids=cited)
     decision(sv, "d1", ["c1"])
     result = sv.request_execution("d1", DIRECTOR)
-    assert failures_with(result, CONSTRAINT_MSG) == []
+    assert (failures_with(result, CONSTRAINT_MSG) == []) is meets
 
 
 # ===========================================================================
 # SCENE 19 — EXITS THAT LEAVE THE LOOP OPEN
 # Proves: a constraint that exited by an open-state type, or by TIMEOUT,
-# does not meet the requirement.
+# does not meet the requirement (nor does TERMINAL: Scene 18).
 # ===========================================================================
 
 @pytest.mark.parametrize("exit_type", OPEN_EXITS, ids=lambda t: t.name)
 def test_constraint_exited_with_open_loop_state_fails(exit_type):
     """
-    Spec: a loop "exited by a type whose Loop State After is open
-    (containment, recoverable, delegated, deferred, forced, exhaustion,
-    boundary, ambiguity, key person) does not meet it." TIMEOUT is in
-    neither list; it is not one of the closed types "(terminal,
-    superseded)", so by the positive definition it does not meet it either.
+    Spec: "A loop that is open, closed by authority or role switch,
+    latched, closed by evidence that is not chain-sound, or exited by any
+    other type does not meet it. That includes the terminal, timeout,
+    whistleblower, and legal exits". Every exit but a supersession shown by
+    an External Evidence Source fails, so each of these does.
     """
     # PLAYERS IN THIS SCENE
     #   sv, result, msgs   as in Scene 5
@@ -632,8 +747,9 @@ def test_constraint_exited_with_open_loop_state_fails(exit_type):
 
 def test_anomaly_exited_deferred_fails():
     """
-    Spec: "every constraint and anomaly signal ... has exited by a type
-    whose Loop State After is closed"; deferred is listed as open.
+    Spec: "Constraint and anomaly loops evidence-closed" covers "every
+    constraint and anomaly signal the decision depends on"; a deferred
+    exit is not a supersession shown by an External Evidence Source.
     """
     # PLAYERS IN THIS SCENE
     #   sv, result, msgs   as in Scene 5
@@ -647,80 +763,97 @@ def test_anomaly_exited_deferred_fails():
 
 
 # ===========================================================================
-# SCENE 21 — REASONED ENTIRELY INDOORS
-# Proves: a decision whose support holds no EES fails with the EES message.
+# SCENE 21 — NO CLAIM, NO CHECK
+# Proves: an acceptance that names no principal risk claim fails the
+# requirement, whatever else the decision has.
 # ===========================================================================
 
-def test_decision_without_any_ees_fails():
+def test_acceptance_without_risk_claim_fails():
     """
-    Spec: "A decision reasoned through entirely inside one process, however
-    many loops it closed or reviews it passed, does not meet this
-    requirement."
+    Spec: "the Rule 4 acceptance names the decision's principal risk claim,
+    what must be true for the decision to be safe to execute, and cites at
+    least one External Evidence Source bearing on it".
 
-    Setting the stage: the only constraint exited TERMINAL (it meets the
-    constraint requirement without evidence), and the acceptance cites no
-    evidence. The verdict: the EES failure appears; the constraint failure
-    does not.
+    Setting the stage: an evidence-closed constraint; the acceptance cites
+    an independent measurement but names no risk claim. The verdict: the
+    risk-claim failure appears.
     """
     # PLAYERS IN THIS SCENE
     #   sv, result   as in Scene 5
     sv = Supervisor()
     to_review(sv, "c1")
-    sv.exit("c1", ExitType.TERMINAL, "steward", "done", open_loop_state="none")
-    decision(sv, "d1", ["c1"])
+    close_by_evidence(sv, "c1", "e1")
+    decision(sv, "d1", ["c1"], accept=False)
+    add_ees(sv, "acc-ev")
+    sv.accept_decision("d1", DIRECTOR, "accepted", evidence_ids=["acc-ev"], **RULE3)
     result = sv.request_execution("d1", DIRECTOR)
     assert not result.permitted
-    assert failures_with(result, EES_MSG) == [EES_MSG]
-    assert failures_with(result, CONSTRAINT_MSG) == []
+    assert failures_with(result, RISK_MSG) == [RISK_MSG]
 
 
 # ===========================================================================
-# SCENE 22 — ONLY NON-EES CLOSURES
-# Proves: loops closed only by authority give no EES.
+# SCENE 22 — THE LOOPS' EVIDENCE DOES NOT SUBSTITUTE
+# Proves: EES evidence in the loops' closures does not meet the
+# requirement; only the acceptance's own citation does.
 # ===========================================================================
 
-def test_decision_closed_only_by_authority_fails_ees():
+def test_closure_evidence_does_not_substitute_for_risk_claim_ees():
     """
-    Spec: the support is "the qualifying evidence of its loops' chain-sound
-    evidence closures, or evidence cited in its Rule 4 acceptance"; an
-    authority closure has no qualifying evidence.
+    Spec: "Evidence elsewhere in the decision's support, in its loops'
+    closures, does not substitute: it shows that individual loops were
+    resolved, not that the risk the acceptor is taking on was checked by
+    anything outside the process that proposed it."
+
+    Setting the stage: two loops evidence-closed with independent lab
+    evidence; the acceptance names a risk claim but cites nothing. The
+    verdict: the EES failure appears, and the loops themselves pass.
     """
     # PLAYERS IN THIS SCENE
     #   sv, result   as in Scene 5
     sv = Supervisor()
+    to_review(sv, "c1")
     to_review(sv, "u1", SignalType.UNCERTAINTY)
-    close_by_authority(sv, "u1")
-    decision(sv, "d1", ["u1"])
+    close_by_evidence(sv, "c1", "e1")
+    close_by_evidence(sv, "u1", "e2")
+    decision(sv, "d1", ["c1", "u1"], accept=False)
+    sv.accept_decision("d1", DIRECTOR, "the loops are closed", **RISK)
     result = sv.request_execution("d1", DIRECTOR)
     assert failures_with(result, EES_MSG) == [EES_MSG]
+    assert failures_with(result, CONSTRAINT_MSG) == []
+    assert failures_with(result, RATIO_MSG) == []
 
 
 # ===========================================================================
 # SCENE 23 — A WITNESS AT THE SIGNING
-# Proves: EES evidence cited in the Rule 4 acceptance satisfies the
-# requirement.
+# Proves: an EES cited in the Rule 4 acceptance, with a named risk claim,
+# meets the requirement.
 # ===========================================================================
 
 def test_ees_cited_in_acceptance_satisfies_requirement():
     """
-    Spec (changelog): "irreversible execution requires at least one External
-    Evidence Source somewhere in the decision's support, including evidence
-    cited in its Rule 4 acceptance."
+    Spec: "the Rule 4 acceptance names the decision's principal risk claim
+    ... and cites at least one External Evidence Source bearing on it".
 
-    Setting the stage: as in Scene 21, but the director cites an independent
-    lab measurement when accepting. The verdict: no EES failure.
+    Setting the stage: an evidence-closed constraint; the director names
+    the risk claim and cites an independent lab measurement. The verdict:
+    neither failure, the decision executes, and the claim is recorded.
     """
     # PLAYERS IN THIS SCENE
     #   sv, result   as in Scene 5
     sv = Supervisor()
     to_review(sv, "c1")
-    sv.exit("c1", ExitType.TERMINAL, "steward", "done", open_loop_state="none")
+    close_by_evidence(sv, "c1", "e1")
     decision(sv, "d1", ["c1"], accept=False)
     add_ees(sv, "acc-ev")
     sv.accept_decision("d1", DIRECTOR, "accepted on the lab's measurement",
-                       evidence_ids=["acc-ev"])
+                       evidence_ids=["acc-ev"], **RISK)
+    attest(sv, "d1")
     result = sv.request_execution("d1", DIRECTOR)
     assert failures_with(result, EES_MSG) == []
+    assert failures_with(result, RISK_MSG) == []
+    assert result.permitted, result.failures
+    assert sv.decisions["d1"].risk_claim == RISK["risk_claim"]
+    assert entries(sv, "DECISION_ACCEPTED")[-1].payload["risk_claim"] == RISK["risk_claim"]
 
 
 # ===========================================================================
@@ -739,19 +872,20 @@ def test_ees_cited_in_acceptance_satisfies_requirement():
         "internal-analysis"])
 def test_non_qualifying_acceptance_evidence_does_not_satisfy_ees(kind, producer):
     """
-    Spec: "at least one EES: evidence of an eligible kind produced by neither
-    a process under evaluation in the decision's loops nor the agent
-    accepting the decision."
+    Spec (Layer 2, EES): the producer is none of "the agent making the
+    claim it is offered for (... the accepting agent, for a Rule 4
+    acceptance); the agent accepting the decision it supports; or any
+    process whose output the claim evaluates", and the kind is eligible.
     """
     # PLAYERS IN THIS SCENE
     #   sv, result   as in Scene 5
     sv = Supervisor()
     to_review(sv, "c1")
-    sv.exit("c1", ExitType.TERMINAL, "steward", "done", open_loop_state="none")
+    close_by_evidence(sv, "c1", "e1")
     decision(sv, "d1", ["c1"], accept=False)
     sv.add_evidence("acc-ev", "acceptance evidence", "test", kind, producer,
                     "evidence-clerk")
-    sv.accept_decision("d1", DIRECTOR, "accepted", evidence_ids=["acc-ev"])
+    sv.accept_decision("d1", DIRECTOR, "accepted", evidence_ids=["acc-ev"], **RISK)
     result = sv.request_execution("d1", DIRECTOR)
     assert failures_with(result, EES_MSG) == [EES_MSG]
 
@@ -764,16 +898,15 @@ def test_non_qualifying_acceptance_evidence_does_not_satisfy_ees(kind, producer)
 
 def test_acceptance_evidence_from_another_loops_process_is_not_ees():
     """
-    Spec: "produced by neither a process under evaluation in the decision's
-    loops nor the agent accepting the decision."
+    Spec: the producer is not "any process whose output the claim
+    evaluates", and the risk claim is about the whole decision.
 
-    Setting the stage: two constraints, both exited TERMINAL; the second is
-    about "second-process". The acceptance cites a measurement produced by
+    Setting the stage: two constraints, the second about
+    "second-process". The acceptance cites a measurement produced by
     "second-process". The verdict: the EES failure appears.
     """
     # PLAYERS IN THIS SCENE
     #   sv, result   as in Scene 5
-    #   sid          each constraint, exited TERMINAL in turn
     sv = Supervisor()
     to_review(sv, "c1")
     # --- A loop about a different process, built by hand --------------------
@@ -781,40 +914,41 @@ def test_acceptance_evidence_from_another_loops_process_is_not_ees():
                        "second-process", steward="steward", successor="successor")
     sv.classify("c2", OperationalState.ELEVATED_UNCERTAINTY, "engineer")
     sv.open_review("c2", "engineer")
-    for sid in ("c1", "c2"):
-        sv.exit(sid, ExitType.TERMINAL, "steward", "done", open_loop_state="none")
     decision(sv, "d1", ["c1", "c2"], accept=False)
     add_ees(sv, "acc-ev", produced_by="second-process")
-    sv.accept_decision("d1", DIRECTOR, "accepted", evidence_ids=["acc-ev"])
+    sv.accept_decision("d1", DIRECTOR, "accepted", evidence_ids=["acc-ev"], **RISK)
     result = sv.request_execution("d1", DIRECTOR)
     assert failures_with(result, EES_MSG) == [EES_MSG]
 
 
 # ===========================================================================
-# SCENE 26 — HOLLOW EVIDENCE GIVES NO EES
-# Proves: EES evidence inside a closure that is not chain-sound does not
-# put an EES in the decision's support.
+# SCENE 26 — THE ACCEPTOR'S OWN MEASUREMENT CLOSES NOTHING FOR THEM
+# Proves: a loop closed by evidence the accepting agent produced is not
+# resolved for that agent's decision (Layer 2, EES: the producer is not
+# "the agent accepting the decision it supports"); the same closure still
+# stands as an evidence closure on its own.
 # ===========================================================================
 
-def test_ees_only_inside_chain_unsound_closure_does_not_count():
+def test_closure_on_acceptor_evidence_is_not_resolved_for_that_decision():
     """
-    Spec: the support is "the qualifying evidence of its loops' chain-sound
-    evidence closures, or evidence cited in its Rule 4 acceptance".
-
-    Setting the stage: "rig" authority-closed (outside the decision); "c1"
-    evidence-closed with lab evidence depending on "rig". The acceptance
-    cites nothing. The verdict: the EES failure appears.
+    Setting the stage: "c1" closed by REVIEWER citing a measurement that
+    DIRECTOR produced. The closure is an evidence closure (REVIEWER is the
+    claimant). The action: DIRECTOR accepts the decision over c1 and asks
+    to execute. The verdict: the constraint failure names c1; chain_sound
+    still reports the closure as sound outside the decision.
     """
     # PLAYERS IN THIS SCENE
-    #   sv, result   as in Scene 5
+    #   sv, result, msgs   as in Scene 5
     sv = Supervisor()
-    to_review(sv, "rig")
     to_review(sv, "c1")
-    close_by_authority(sv, "rig")
-    close_by_evidence(sv, "c1", "e1", depends_on=["rig"])
+    add_ees(sv, "director-reading", ["c1"], produced_by=DIRECTOR)
+    rec = sv.attempt_closure("c1", REVIEWER, TECH, ["director-reading"], "measured")
+    assert rec.closure_type is ClosureType.EVIDENCE
+    assert sv.chain_sound("c1")
     decision(sv, "d1", ["c1"])
     result = sv.request_execution("d1", DIRECTOR)
-    assert failures_with(result, EES_MSG) == [EES_MSG]
+    msgs = failures_with(result, CONSTRAINT_MSG)
+    assert len(msgs) == 1 and "c1" in msgs[0]
 
 
 # ===========================================================================
@@ -890,9 +1024,10 @@ def test_open_upstream_then_evidence_closed_upstream():
 
 def test_evidence_closed_upstream_makes_downstream_count():
     """
-    Spec: "An evidence closure is chain-sound only if at least one item of
-    qualifying evidence it cites has every upstream loop itself chain-sound:
-    closed by evidence closure, all the way up."
+    Spec: "An evidence closure is chain-sound only if every item of
+    evidence it cites has every upstream loop itself resolved — closed by
+    chain-sound evidence closure, or exited as superseded with an External
+    Evidence Source — all the way up."
     """
     # PLAYERS IN THIS SCENE
     #   sv, result   as in Scene 5
@@ -918,8 +1053,8 @@ def test_evidence_closed_upstream_makes_downstream_count():
                                                                 "top-authority"])
 def test_chain_soundness_is_transitive(top_by_evidence):
     """
-    Spec: "has every upstream loop itself chain-sound: closed by evidence
-    closure, all the way up."
+    Spec: "has every upstream loop itself resolved — closed by chain-sound
+    evidence closure ... — all the way up."
 
     Setting the stage: "top" <- "mid" <- "c1" (each one's closing evidence
     depends on the loop to its left). The verdict: "c1" is chain-sound only
@@ -942,24 +1077,23 @@ def test_chain_soundness_is_transitive(top_by_evidence):
 
 
 # ===========================================================================
-# SCENE 31 — ONE GOOD WITNESS IS ENOUGH; A BAD-KIND ONE IS NOT
-# Proves: "at least one item of qualifying evidence" with a sound chain
-# makes the closure sound; non-qualifying evidence cannot supply it.
+# SCENE 31 — EVERY CITED ITEM IS LOAD-BEARING
+# Proves: a closure cannot pass by pairing one clean item with another that
+# rests on an unresolved loop, whatever the clean item's kind; a cited item
+# that rests on nothing does no harm.
 # ===========================================================================
 
 @pytest.mark.parametrize("second_is_ees", [True, False], ids=["second-ees",
                                                               "second-model-output"])
-def test_at_least_one_qualifying_item_with_sound_chain(second_is_ees):
+def test_every_cited_item_is_load_bearing(second_is_ees):
     """
-    Spec: "An evidence closure is chain-sound only if at least one item of
-    qualifying evidence it cites has every upstream loop itself
-    chain-sound".
+    Spec: "Citing an item is relying on it, so every cited item is
+    load-bearing: a closure cannot pass by pairing one clean item with
+    others that rest on unresolved loops."
 
-    Setting the stage: "c1" is closed citing two items: e-bad (EES, depends
-    on an authority-closed "rig") and e-free (no upstream loops). When e-free
-    is EES it is qualifying evidence with a sound (empty) chain, so the
-    closure is sound. When e-free is model output it is not qualifying, so
-    only e-bad qualifies and the closure is not sound.
+    Setting the stage: "c1" is closed citing e-bad (EES, depends on an
+    authority-closed "rig") and e-free (no upstream loops; EES or model
+    output). The verdict: the closure is never chain-sound.
     """
     # PLAYERS IN THIS SCENE
     #   sv   the Supervisor
@@ -975,7 +1109,76 @@ def test_at_least_one_qualifying_item_with_sound_chain(second_is_ees):
     else:
         add_non_ees(sv, "e-free", EvidenceKind.MODEL_OUTPUT, ["c1"])
     sv.attempt_closure("c1", REVIEWER, TECH, ["e-bad", "e-free"], "measured twice")
-    assert sv.chain_sound("c1") is second_is_ees
+    assert sv.chain_sound("c1") is False
+
+
+def test_non_qualifying_item_resting_on_an_unresolved_loop_also_breaks_it():
+    """
+    Spec: "every item of evidence it cites" — not every qualifying item.
+
+    Setting the stage: "c1" is closed citing a clean EES item and a model
+    output that depends on an authority-closed "rig". The verdict: not
+    chain-sound. Without the model output it would be.
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv   the Supervisor
+    sv = Supervisor()
+    to_review(sv, "rig")
+    to_review(sv, "c1")
+    close_by_authority(sv, "rig")
+    add_ees(sv, "e-clean", ["c1"])
+    sv.add_evidence("e-model", "simulated on the rig", "test", EvidenceKind.MODEL_OUTPUT,
+                    INDEPENDENT_LAB, "evidence-clerk", signal_ids=("c1",),
+                    depends_on=["rig"])
+    sv.attempt_closure("c1", REVIEWER, TECH, ["e-clean", "e-model"], "measured and simulated")
+    assert sv.chain_sound("c1") is False
+
+
+def test_harmless_extra_item_does_not_break_a_sound_closure():
+    """
+    Setting the stage: "c1" closed citing a clean EES item and a model
+    output with no upstream loops. The verdict: chain-sound (the model
+    output is not evidence, but it rests on nothing unresolved).
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv   the Supervisor
+    sv = Supervisor()
+    to_review(sv, "c1")
+    add_ees(sv, "e-clean", ["c1"])
+    add_non_ees(sv, "e-model", EvidenceKind.MODEL_OUTPUT, ["c1"])
+    sv.attempt_closure("c1", REVIEWER, TECH, ["e-clean", "e-model"], "measured")
+    assert sv.chain_sound("c1") is True
+
+
+# ===========================================================================
+# SCENE 31b — AN UPSTREAM LOOP SUPERSEDED
+# Proves: an upstream loop "exited as superseded with an External Evidence
+# Source" counts as resolved in the chain; superseded without one does not.
+# ===========================================================================
+
+@pytest.mark.parametrize("with_ees", [True, False], ids=["superseded-ees", "superseded-bare"])
+def test_upstream_superseded_with_ees_resolves_the_chain(with_ees):
+    """
+    Spec (Closure Chain): every upstream loop "itself resolved — closed by
+    chain-sound evidence closure, or exited as superseded with an External
+    Evidence Source".
+
+    Setting the stage: "rig" exits superseded (the old rig was retired),
+    citing an independent record or nothing; "c1" is evidence-closed with
+    evidence depending on "rig". The verdict: c1 is chain-sound exactly
+    when the supersession was shown by an EES.
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv   the Supervisor
+    sv = Supervisor()
+    to_review(sv, "rig")
+    to_review(sv, "c1")
+    if with_ees:
+        add_ees(sv, "retirement-record", kind=EvidenceKind.PRIMARY_DOCUMENT)
+    sv.exit("rig", ExitType.SUPERSEDED, "steward", "the old rig was retired",
+            evidence_ids=["retirement-record"] if with_ees else [])
+    close_by_evidence(sv, "c1", "e1", depends_on=["rig"])
+    assert sv.chain_sound("c1") is with_ees
 
 
 # ===========================================================================
@@ -1071,6 +1274,46 @@ def test_unknown_upstream_id_is_refused_and_nothing_stored():
     sv.add_evidence("e1", "measured", "test", EvidenceKind.DIRECT_MEASUREMENT,
                     INDEPENDENT_LAB, "evidence-clerk", signal_ids=("c1",))
     assert "e1" in sig.evidence_ids
+
+
+# ===========================================================================
+# SCENE 34b — A DEPENDENCY FOUND LATER
+# Proves: "A dependency registered after the closure it affects, because it
+# was discovered later, is logged as late, and the closure loses its
+# standing from that point".
+# ===========================================================================
+
+def test_late_dependency_is_logged_and_weakens_the_closure():
+    """
+    Setting the stage: "c1" closed by chain-sound evidence e1; "rig" was
+    closed by authority. The action: e1 is found to depend on "rig"
+    (add_dependency). The verdict: LATE_DEPENDENCY names the closure,
+    CHAIN_WEAKENED names c1, c1 is no longer chain-sound, and a dependency
+    added to uncited evidence is logged only as DEPENDENCY_ADDED.
+    """
+    # PLAYERS IN THIS SCENE
+    #   sv     the Supervisor
+    #   rec    c1's closure record
+    #   late   the LATE_DEPENDENCY entries
+    sv = Supervisor()
+    to_review(sv, "rig")
+    to_review(sv, "c1")
+    close_by_authority(sv, "rig")
+    rec = close_by_evidence(sv, "c1", "e1")
+    assert sv.chain_sound("c1") is True
+    sv.add_dependency("e1", "rig", "auditor")
+    late = entries(sv, "LATE_DEPENDENCY")
+    assert len(late) == 1 and late[0].payload["closures"] == [rec.record_id]
+    assert [e.payload["signal"] for e in entries(sv, "CHAIN_WEAKENED")] == ["c1"]
+    assert sv.chain_sound("c1") is False
+    assert sv.evidence["e1"].depends_on == ("rig",)
+    # --- Evidence nobody has cited yet: not late -----------------------------
+    add_ees(sv, "e-spare")
+    sv.add_dependency("e-spare", "rig", "auditor")
+    assert len(entries(sv, "LATE_DEPENDENCY")) == 1
+    assert len(entries(sv, "DEPENDENCY_ADDED")) == 2
+    with pytest.raises(TransitionRefused):
+        sv.add_dependency("e-spare", "no-such-loop", "auditor")
 
 
 # ===========================================================================

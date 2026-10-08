@@ -322,7 +322,9 @@ class Instrumentor:
           TRANSITION with a closure_type      -> cclf.closures   +1 {type}
           ESCALATION                          -> cclf.escalations +1 {condition}
           EXECUTION_PERMITTED / _BLOCKED /
-          GATE_OVERRIDE / EXECUTION_REFUSED   -> cclf.gate.outcomes +1 {outcome}
+          GATE_OVERRIDE / EXECUTION_REFUSED /
+          EMERGENCY_JUSTIFICATION /
+          EMERGENCY_REFUSED                   -> cclf.gate.outcomes +1 {outcome}
                                                  and, if the payload has a
                                                  coherence value, cclf.coherence
         Every other event is ignored.
@@ -334,7 +336,7 @@ class Instrumentor:
         elif event == "ESCALATION":
             self._escalations.add(1, {"condition": str(payload.get("condition"))})
         elif event in ("EXECUTION_PERMITTED", "EXECUTION_BLOCKED", "GATE_OVERRIDE",
-                       "EXECUTION_REFUSED"):
+                       "EXECUTION_REFUSED", "EMERGENCY_JUSTIFICATION", "EMERGENCY_REFUSED"):
             self._gates.add(1, {"outcome": event})
             if "coherence" in payload:
                 self._coherence.record(float(payload["coherence"]))

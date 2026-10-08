@@ -26,8 +26,9 @@ signals are reopened (and, because the recurrence escalation names them,
 go straight to escalated). The decision to continue treatment is then
 blocked: every reporter is an interested party (AP-F captured channel),
 the overdose loops are not evidence-closed, the recurrence group is
-unreviewed, no External Evidence Source supports the decision, and
-coherence is below threshold.
+unreviewed, the acceptance names no principal risk claim (so no External
+Evidence Source checks it) and no Rule 3 registration, and coherence is
+below threshold.
 
 READER'S NOTE — two kinds of rule label in the notes
     A note may name two things. "Draft:" says where the draft tells this
@@ -171,7 +172,8 @@ THERAC25 += [
      "note": "Rule 4 acceptance by the manufacturer"},
     {"op": "request_execution", "decision_id": "continue-treatment", "by": "aecl",
      "note": "blocked: captured channel (AP-F), loops not evidence-closed, "
-             "unreviewed recurrence, no External Evidence Source, low coherence"},
+             "unreviewed recurrence, no principal risk claim or Rule 3 registration, "
+             "low coherence"},
 ]
 
 # EXEUNT — end of file.

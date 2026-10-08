@@ -27,7 +27,7 @@ event (plain dict)
 
 Only `report` events reach a language model. Signal registration, classification, closure, escalation, exits and execution gates are computed locally, and the model's output is only ever a proposal that the supervisor checks under the same rules as anyone else's.
 
-The three bundled scenarios contain no `report` events, so replaying them makes no model calls. The eval (`evals/closure_pressure.py`) does call a model, with the case text in the prompt.
+The five bundled scenarios contain no `report` events, so replaying them makes no model calls. The eval (`evals/closure_pressure.py`) does call a model, with the case text in the prompt.
 
 ---
 
@@ -52,7 +52,7 @@ Report text sent to the advisor leaves the host.
 ### 2. Free text in the audit trail (high)
 45 CFR § 164.312(b) audit controls and § 164.312(a) access controls.
 
-The audit trail stores signal descriptions, reversal paths, rationales, credibility characterizations, Rule 8 model updates and evidence sources verbatim. Decision descriptions and evidence content are held in memory but not logged. `run_demo.py` always writes the trail to a local JSON file with no access control. The hash chain detects tampering but provides neither confidentiality nor access logging.
+The audit trail stores signal descriptions, reversal paths, rationales, credibility characterizations, Rule 8 model updates, review findings, principal risk claims, risk-evidence attestations and their rationales, Rule 3 registrations (what is known, assumed and uncertain), every element of an Emergency Justification, agent kinds, reporting lines and evidence sources verbatim. Decision descriptions and evidence content are held in memory but not logged. `run_demo.py` always writes the trail to a local JSON file with no access control. The hash chain detects tampering but provides neither confidentiality nor access logging.
 
 **Remediation:** write the trail to an access-controlled, access-logged store covered by a BAA; restrict writes to the runtime and reads to authorized reviewers.
 

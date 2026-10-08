@@ -21,10 +21,15 @@ Why a shared module? pytest.ini puts tests/ on the import path
 shows the part of the story it is about.
 
 THE PLAYBILL
+    (DRAMATIS PERSONAE also holds ATTESTER, RULE3, UPDATE and
+    UPDATE_AT_LEVEL: the independent risk-evidence attester, and the
+    complete Rule 3 registration and Rule 8 updates the October 2026 gate
+    and review rules require, ready to pass as keyword arguments.)
     Scene 1   to_review()         register, classify and open review on a signal
     Scene 2   add_ees()           add evidence that qualifies as EES
     Scene 3   add_non_ees()       add evidence of a kind that never qualifies
     Scene 4   decision()          register (and by default accept) a decision
+    Scene 4b  attest()            independent attestation of the risk evidence
     Scene 5   entries()           the audit entries carrying one event name
     Scene 6   transitions()       (from, to) pairs of every logged TRANSITION
 
@@ -45,10 +50,11 @@ READER'S NOTE — why signals get a steward and successor by default
 #   Referent          technical vs customer (R5.3)
 #   EvidenceKind      what kind of process produced a piece of evidence
 #   ExecutionClass    irreversible / elevated / routine
+#   Power             the granted powers (attest() grants OVERRIDE)
 # ===========================================================================
 
 from cclf import (
-    EvidenceKind, ExecutionClass, OperationalState, Referent, SignalType, Supervisor,
+    EvidenceKind, ExecutionClass, OperationalState, Power, Referent, SignalType, Supervisor,
 )
 
 
@@ -67,6 +73,22 @@ PROCESS = "program-under-evaluation"
 # INDEPENDENT_LAB — a producer with no causal tie to PROCESS or to any
 #   registrant used in the tests, so its evidence can qualify as EES.
 INDEPENDENT_LAB = "independent-lab"
+
+# ATTESTER — an independent agent (never an acceptor or requester in the
+#   tests) who attests that an acceptance's evidence bears on its risk claim.
+ATTESTER = "risk-attester"
+
+# RULE3 — a complete Rule 3 registration ("what is known, what is assumed,
+#   and what remains genuinely uncertain"), as accept_decision keywords.
+RULE3 = dict(known="the measured margins", assumed="the load model holds",
+             uncertain="behaviour beyond the tested range")
+
+# UPDATE — a complete Rule 8 update for resolve_review: an update text and
+#   the registered elements it changes. Recurrence reviews also need a
+#   level (UPDATE_AT_LEVEL).
+UPDATE = dict(model_update="tighten the gate parameter",
+              elements_changed=["gate parameter: inspection interval"])
+UPDATE_AT_LEVEL = dict(UPDATE, level="the design process that generates the instances")
 
 
 # ===========================================================================
@@ -152,7 +174,8 @@ def add_non_ees(sv: Supervisor, evidence_id: str, kind, signal_ids=()):
 
 def decision(sv: Supervisor, decision_id: str, signal_ids,
              execution_class=ExecutionClass.IRREVERSIBLE, accept: bool = True,
-             by: str = "director", reversible: bool = True):
+             by: str = "director", reversible: bool = True, risk_checked: bool = True,
+             root=None):
     """
     Register a decision and (unless accept=False) have one agent accept it.
 
@@ -167,11 +190,24 @@ def decision(sv: Supervisor, decision_id: str, signal_ids,
                                 (default). False registers the lower class
                                 with no reversal path, so the gate treats it
                                 as irreversible (Execution Class Assignment).
+             risk_checked       with accept: name a principal risk claim,
+                                cite independent-lab evidence for it
+                                ("risk-check-<decision_id>"), record the
+                                Rule 3 registration, and have ATTESTER
+                                attest that the evidence bears on the claim,
+                                so the irreversible gate's risk-claim and
+                                Rule 3 tests pass (default). False accepts
+                                with the rationale only, as tests of those
+                                tests need.
+             root               with authority enforced: the root that
+                                grants ATTESTER the OVERRIDE power it needs
+                                (see attest())
     Exit:    the Decision object
     """
     # PLAYERS IN THIS SCENE
     #   path, evidence   the reversal path and its evidence ids, if any
     #   d                the new Decision
+    #   risk             keyword arguments for the risk claim and Rule 3
 
     path, evidence = None, ()
     if execution_class != ExecutionClass.IRREVERSIBLE and reversible:
@@ -180,8 +216,37 @@ def decision(sv: Supervisor, decision_id: str, signal_ids,
     d = sv.register_decision(decision_id, f"decision {decision_id}", execution_class,
                              signal_ids, by, reversal_path=path, reversal_evidence_ids=evidence)
     if accept:
-        sv.accept_decision(decision_id, by, "I accept authorization, risk and rationale")
+        risk = {}
+        if risk_checked:
+            add_ees(sv, f"risk-check-{decision_id}")
+            risk = dict(evidence_ids=[f"risk-check-{decision_id}"],
+                        risk_claim=f"{decision_id} is safe to execute", **RULE3)
+        sv.accept_decision(decision_id, by, "I accept authorization, risk and rationale",
+                           **risk)
+        if risk_checked:
+            attest(sv, decision_id, root)
     return d
+
+
+# ===========================================================================
+# SCENE 4b — A SECOND PAIR OF EYES
+# attest(): have ATTESTER attest a decision's risk evidence.
+# ===========================================================================
+
+def attest(sv: Supervisor, decision_id: str, root=None):
+    """
+    Have ATTESTER attest that the decision's acceptance evidence bears on
+    its principal risk claim.
+
+    Enter:   sv, decision_id   an accepted decision naming a risk claim
+             root              with authority enforced: the root that grants
+                               ATTESTER OVERRIDE over the decision's scope
+                               first (the attester must hold it)
+    Exit:    the RiskAttestation
+    """
+    if root is not None:
+        sv.grant(ATTESTER, Power.OVERRIDE, sv.decisions[decision_id].scope, by=root)
+    return sv.attest_risk_evidence(decision_id, ATTESTER, "the cited evidence measures the claim")
 
 
 # ===========================================================================

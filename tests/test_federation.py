@@ -1,7 +1,7 @@
 """
 THE FEDERATION, TESTED
-A Play in Twenty-Three Scenes
-=============================
+A Play in Twenty-Six Scenes
+===========================
 
 PROLOGUE
 --------
@@ -15,12 +15,14 @@ federation to:
     peer's closure leaves the local mirror open until this node accepts it.
   Local Closure (Key Definitions): the receiving node closes the loop
     itself, under its own rules.
-  External Evidence Source (Layer 2): evidence "causally independent of
-    the reasoning process that produced the signal". Across nodes this is
-    checked by a producer's signed attestation and signed lineage
-    statements that share nothing.
-  Closure Chain (Layer 2): a closure is only as sound as every loop its
-    evidence rests on, now including loops at other nodes.
+  External Evidence Source (Layer 2): evidence whose "errors cannot share
+    a cause with the errors of the process making the claim"; its producer
+    is not the claimant (the closing agent) nor the process the claim
+    evaluates. Across nodes this is checked by a producer's signed
+    attestation and signed lineage statements that share nothing.
+  Closure Chain (Layer 2): a closure is only as sound as every loop that
+    any cited item rests on, now including loops at other nodes; an
+    upstream loop superseded with an EES counts as resolved.
   Audit Trail: append-only. Across nodes, a signed head commits a node to
     its whole history, so two different signed histories are proof of
     equivocation.
@@ -54,6 +56,9 @@ THE PLAYBILL
     Scene 21  test_no_node_changes_another_nodes_state
     Scene 22  test_honest_scenario_logs_parse_clean             (parametrized, 3 runs)
     Scene 23  test_honest_random_logs_parse_clean               (randomized, 100 runs)
+    Scene 24  test_remote_ees_excludes_the_closer_not_the_registrant
+    Scene 25  test_remote_closure_with_one_unsound_cited_item_is_rejected
+    Scene 26  test_remote_superseded_upstream_and_late_dependency
 
 READER'S NOTE — two Nodes with one key
     Scenes 12 and 19 need a dishonest node: one that signs two different
@@ -69,7 +74,7 @@ READER'S NOTE — two Nodes with one key
 # pytest                fixtures and raises.
 # cclf                  Supervisor vocabulary.
 # cclf.federation       the module under test.
-# stagehands            CUST, TECH (referents).
+# stagehands            TECH (a referent); RULE3 (a Rule 3 registration).
 # ===========================================================================
 
 import random
@@ -79,10 +84,10 @@ import pytest
 
 from cclf import (Advisor, CommitmentState, EvidenceKind, ExecutionClass, ExitType,
                   OperationalState, SignalType, Supervisor, TransitionRefused, replay)
-from cclf.federation import (AgentKey, Node, TrustList, attest, audit_federation,
-                             declare_lineage, parse_log)
+from cclf.federation import (AgentKey, Node, TrustList, _remote_sound, attest,
+                             audit_federation, declare_lineage, parse_log)
 from scenarios import SCENARIOS
-from stagehands import TECH
+from stagehands import RULE3, TECH
 
 
 # ===========================================================================
@@ -213,7 +218,15 @@ def test_remote_closure_leaves_the_mirror_open_until_accepted(world):
 def test_accepted_closure_lets_the_local_gate_pass(world):
     close_at(world, world.bell, "frr-3")
     mirror(world, world.acme, world.bell, "frr-3")
-    world.acme.sv.accept_decision("launch", "mgr", "accept risk")
+    # The principal risk claim needs its own External Evidence Source in
+    # the acceptance (October 2026): the mirror's closure evidence does not
+    # substitute for it.
+    world.acme.sv.add_evidence("launch-check", "joint inspected", "inspection",
+                               EvidenceKind.DIRECT_MEASUREMENT, "acme-inspection", "acme-ops")
+    world.acme.sv.accept_decision("launch", "mgr", "accept risk", evidence_ids=["launch-check"],
+                                  risk_claim="the joint seals at launch temperature", **RULE3)
+    world.acme.sv.attest_risk_evidence("launch", "acme-safety",
+                                       "the inspection measures the joint seal")
     blocked = world.acme.sv.request_execution("launch", "mgr")
     assert not blocked.permitted
     world.acme.accept_remote_closure("bell", "frr-3", by="acme-ops")
@@ -617,3 +630,87 @@ def test_honest_random_logs_parse_clean(seed):
             pass
     assert parse_log(sv.audit.entries()).problems == []
 
+
+# ===========================================================================
+# SCENE 24 — One EES definition across the boundary
+# Proves: the remote recomputation uses the claimant (the closing agent),
+# not the registrant, as the Supervisor does (Layer 2, EES): the
+# registrant's own measurement can carry another agent's closure; the
+# closer's own cannot.
+# ===========================================================================
+
+def test_remote_ees_excludes_the_closer_not_the_registrant(world):
+    bell = world.bell
+    # eng1 registered "by-registrant"; the measurement is eng1's; eng2 closes.
+    register_at(bell, "by-registrant")
+    bell.sv.add_evidence("reg-ev", "cold test", "eng1's reading",
+                         EvidenceKind.DIRECT_MEASUREMENT, "eng1", "eng1", ["by-registrant"])
+    bell.sv.attempt_closure("by-registrant", "eng2", TECH, ["reg-ev"], "measured")
+    # eng2 closes "by-closer" on eng2's own reading.
+    register_at(bell, "by-closer")
+    bell.sv.add_evidence("own-ev", "cold test", "eng2's reading",
+                         EvidenceKind.DIRECT_MEASUREMENT, "eng2", "eng1", ["by-closer"])
+    bell.sv.attempt_closure("by-closer", "eng2", TECH, ["own-ev"], "measured")
+    log = bell.sv.audit.entries()
+    assert _remote_sound(log, "by-registrant", "bell")[0] is True
+    assert bell.sv.chain_sound("by-registrant") is True
+    assert _remote_sound(log, "by-closer", "bell")[0] is False
+    assert bell.sv.signals["by-closer"].state == CommitmentState.CLOSED_AUTHORITY
+
+
+# ===========================================================================
+# SCENE 25 — Every cited item is load-bearing, at the peer too
+# Proves: a peer's closure pairing a clean, attested item with one that
+# rests on an authority-closed loop is not sound when recomputed, and is
+# not accepted (Layer 2, Closure Chain).
+# ===========================================================================
+
+def test_remote_closure_with_one_unsound_cited_item_is_rejected(world):
+    bell = world.bell
+    register_at(bell, "rig")
+    bell.sv.attempt_closure("rig", "manager", TECH, [], "decided")        # authority
+    register_at(bell, "frr-3")
+    bell.sv.add_evidence("clean", "cold test", "lab report", EvidenceKind.DIRECT_MEASUREMENT,
+                         LAB, "eng1", ["frr-3"])
+    bell.hold_attestation(attest(world.keys[LAB], "bell", "clean",
+                                 EvidenceKind.DIRECT_MEASUREMENT, "cold-test data"))
+    bell.sv.add_evidence("on-rig", "rig reading", "lab report", EvidenceKind.DIRECT_MEASUREMENT,
+                         LAB, "eng1", ["frr-3"], depends_on=["rig"])
+    bell.sv.attempt_closure("frr-3", "eng2", TECH, ["clean", "on-rig"], "two readings")
+    assert _remote_sound(bell.sv.audit.entries(), "frr-3", "bell")[0] is False
+    mirror(world, world.acme, bell, "frr-3")
+    ok, why = world.acme.accept_remote_closure("bell", "frr-3", by="acme-ops")
+    assert not ok and "on-rig" in why
+
+
+# ===========================================================================
+# SCENE 26 — A superseded upstream loop, and a dependency found later
+# Proves: an upstream loop exited as superseded with an attested EES
+# resolves the chain at the peer, as in the Supervisor; a dependency added
+# later (DEPENDENCY_ADDED) is replayed from the log and breaks it again.
+# ===========================================================================
+
+def test_remote_superseded_upstream_and_late_dependency(world):
+    bell = world.bell
+    register_at(bell, "old-rig")
+    bell.sv.add_evidence("retired", "rig retired", "asset register",
+                         EvidenceKind.PRIMARY_DOCUMENT, LAB, "eng1")
+    bell.hold_attestation(attest(world.keys[LAB], "bell", "retired",
+                                 EvidenceKind.PRIMARY_DOCUMENT, "asset register entry"))
+    bell.sv.exit("old-rig", ExitType.SUPERSEDED, "eng1", "the old rig was retired",
+                 evidence_ids=["retired"])
+    close_at(world, bell, "frr-3", depends_on=["old-rig"])
+    assert _remote_sound(bell.sv.audit.entries(), "frr-3", "bell")[0] is True
+    mid = mirror(world, world.acme, bell, "frr-3")
+    ok, why = world.acme.accept_remote_closure("bell", "frr-3", by="acme-ops")
+    assert ok, why
+    assert world.acme.sv.signals[mid].state == CommitmentState.CLOSED_EVIDENCE
+    # --- Later: the evidence is found to rest on an authority-closed loop ---
+    register_at(bell, "calibration")
+    bell.sv.attempt_closure("calibration", "manager", TECH, [], "decided")
+    bell.sv.add_dependency("frr-3-ev", "calibration", "auditor")
+    assert parse_log(bell.sv.audit.entries()).evidence["frr-3-ev"]["depends_on"] == \
+        ["old-rig", "calibration"]
+    assert _remote_sound(bell.sv.audit.entries(), "frr-3", "bell")[0] is False
+
+# EXEUNT — end of file.

@@ -17,17 +17,20 @@ Authorized Representative's standing (Rule 9).
 
 What the replay makes the runtime do: two concerns are closed by authority
 (no evidence cited); two nominal classifications are refused for want of
-validating evidence; the MCAS signal is reclassified after its review
-opened, so its classification counts as not stabilized; and the reporter
-for the failure mode is also an interested party, which the gate reports as
-the AP-F captured channel. Registering the service-entry decision
-escalates its authority-closure count. The decision is then blocked (AP-F
-and AP.1b voids, constraint and anomaly loops not evidence-closed, an
-unstabilized classification, no External Evidence Source, an unresolved
-structural review, coherence below threshold). The override that follows
-is refused (Layer 4, Overrides, October 2026): the unresolved structural
-review holds irreversible execution, and Boeing, which accepted the
-decision, cannot also override its gate. The decision does not execute.
+validating evidence; the MCAS signal is reclassified experimental after its
+review opened (a move toward caution, which since October 2026 does not
+itself count as destabilizing); and the reporter for the failure mode is
+also an interested party, which the gate reports as the AP-F captured
+channel. Registering the service-entry decision escalates its
+authority-closure count. The decision is then blocked (AP-F and AP.1b
+voids, constraint and anomaly loops not evidence-closed, classification
+not stabilized because the acceptance registers nothing known, assumed or
+uncertain (Rule 3), the MCAS classification loop left open, no principal
+risk claim, an unresolved structural review). The override that follows is
+refused (Layer 4, Overrides, October 2026): the unresolved structural
+review holds irreversible execution, the Layer 0 void cannot be overridden
+at an irreversible decision, and Boeing, which accepted the decision,
+cannot also override its gate. The decision does not execute.
 
 THE PLAYBILL
     Scene 1  the architecture record              (Rule 9)
@@ -94,9 +97,10 @@ MCAS: list[dict] = [
     # =======================================================================
     # SCENE 3 — CLASSIFICATION
     # mcas-classification: nominal is refused (no evidence), then after the
-    # review opens it is reclassified experimental, so the supervisor counts
-    # its classification as not stabilized. aoa-disagree-alert: nominal
-    # refused; it is left under review.
+    # review opens it is reclassified experimental (toward caution, so not
+    # a lowering). The instability the draft describes shows at the gate as
+    # the missing Rule 3 registration. aoa-disagree-alert: nominal refused;
+    # it is left under review.
     # =======================================================================
     # --- Rules 2 and 3: MCAS classification ------------------------------
     {"op": "register_signal", "signal_id": "mcas-classification",
@@ -113,7 +117,7 @@ MCAS: list[dict] = [
     {"op": "classify", "signal_id": "mcas-classification", "state": "experimental",
      "by": "boeing-engineering",
      "note": "Rule 3: MCAS behaved differently in different internal documents; the "
-             "classification never stabilized"},
+             "decision never registered what was known, assumed or uncertain"},
 
     {"op": "register_signal", "signal_id": "aoa-disagree-alert",
      "signal_type": "anomaly",
@@ -148,8 +152,9 @@ MCAS: list[dict] = [
     # Registering the decision escalates its authority-closure count (two
     # authority closures). Rule 4 acceptance, a request that is blocked,
     # then the same request with override_rationale, which is refused: an
-    # unresolved structural review holds the irreversible decision, and the
-    # accepting agent cannot override its own gate (Layer 4, Overrides).
+    # unresolved structural review holds the irreversible decision, the
+    # Layer 0 void cannot be overridden, and the accepting agent cannot
+    # override its own gate (Layer 4, Overrides).
     # =======================================================================
     # --- The irreversible decision ----------------------------------------
     {"op": "register_decision", "decision_id": "enter-service",

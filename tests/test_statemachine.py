@@ -1,7 +1,7 @@
 """
 THE MACHINE THAT SAYS NO
-A Play in Nine Scenes
-=====================
+A Play in Ten Scenes
+====================
 
 PROLOGUE
 --------
@@ -26,6 +26,7 @@ THE PLAYBILL
     Scene 6   test_closed_loop_reopens_only_into_review
     Scene 7   test_review_cannot_open_before_classification
     Scene 8   test_trajectory_lock_is_terminal
+    Scene 8b  test_executed_open_is_terminal_and_reachable_from_every_non_terminal_state
     Scene 9   test_exit_allowed_only_from_open_states
 
 READER'S NOTE — @pytest.mark.parametrize
@@ -63,11 +64,23 @@ from cclf.types import CLOSED_STATES, CommitmentState as S
 # DRAMATIS PERSONAE (every module-level variable, declared here at the top)
 # ===========================================================================
 
+# LATCH_FROM — the states the POST-EXECUTION LATCH ("any loop not resolved
+#   at irreversible execution -> executed_open") moves a loop from: every
+#   state a registered loop can be in that is not already terminal. The
+#   spec's executed_open paragraph names them: "open, closed by authority or
+#   role switch, or exited" (and an evidence closure that is not
+#   chain-sound is not resolved either).
+LATCH_FROM = [S.REGISTERED, S.CLASSIFIED, S.UNDER_REVIEW, S.CLOSED_EVIDENCE,
+              S.CLOSED_AUTHORITY, S.CLOSED_ROLE_SWITCH, S.SUPPRESSED, S.ESCALATED,
+              S.EXITED]
+
 # SPEC_LISTING — the transition listing of the Commitment State Machine,
-#   typed out by hand: the nine forward transitions, two recovery transitions
-#   and three reopen transitions. Exits are listed separately in the spec
-#   (EXIT TRANSITIONS) and are tested in test_exits.py.
-SPEC_LISTING = {
+#   typed out by hand: the nine forward transitions, two recovery transitions,
+#   three reopen transitions and the nine latch transitions (built from
+#   LATCH_FROM with a set comprehension and joined on with `|`). Exits are
+#   listed separately in the spec (EXIT TRANSITIONS) and are tested in
+#   test_exits.py.
+SPEC_LISTING = {(state, S.EXECUTED_OPEN) for state in LATCH_FROM} | {
     (S.UNREGISTERED, S.REGISTERED),
     (S.REGISTERED, S.CLASSIFIED),
     (S.CLASSIFIED, S.UNDER_REVIEW),
@@ -103,7 +116,8 @@ OPEN_STATES_PER_SPEC = [S.REGISTERED, S.CLASSIFIED, S.UNDER_REVIEW, S.SUPPRESSED
 
 def test_table_matches_spec_listing_exactly():
     """
-    TRANSITIONS has exactly the spec's fourteen non-exit transitions.
+    TRANSITIONS has exactly the spec's fourteen non-exit transitions plus
+    the nine latch transitions.
 
     Enter:   (nothing)
     Exit:    passes if the key set equals SPEC_LISTING and every other pair
@@ -213,11 +227,12 @@ def test_suppressed_cannot_be_silently_closed(closed):
 
 def test_closed_loop_reopens_only_into_review():
     """
-    From each closed state, under_review is the one allowed target.
+    From each closed state, under_review is the one allowed target, apart
+    from the post-execution latch.
 
     Enter:   (nothing)
     Exit:    passes if, for every closed state, the allowed targets are
-             exactly {under_review}
+             exactly {under_review, executed_open}
     """
     # PLAYERS IN THIS SCENE
     #   closed    one closed state
@@ -225,7 +240,7 @@ def test_closed_loop_reopens_only_into_review():
 
     for closed in CLOSED:
         allowed = {t for t in S if check_transition(closed, t)[0]}
-        assert allowed == {S.UNDER_REVIEW}
+        assert allowed == {S.UNDER_REVIEW, S.EXECUTED_OPEN}
 
 
 # ===========================================================================
@@ -262,6 +277,36 @@ def test_trajectory_lock_is_terminal():
     assert not any(check_transition(S.TRAJECTORY_LOCK, t)[0] for t in S)
     assert S.TRAJECTORY_LOCK not in CLOSED_STATES
     assert not exit_allowed(S.TRAJECTORY_LOCK)[0]
+
+
+# ===========================================================================
+# SCENE 8b — EXECUTED OPEN IS THE LAST STOP TOO
+# Proves: Commitment State Machine, "The `executed_open` state is terminal
+# and also distinct from closure", and every non-terminal state can latch
+# into it.
+# ===========================================================================
+
+def test_executed_open_is_terminal_and_reachable_from_every_non_terminal_state():
+    """
+    Nothing leaves executed_open; it is not closed and cannot exit; every
+    LATCH_FROM state may move to it, and the two latched states may not.
+
+    Enter:   (nothing)
+    Exit:    passes if all of the above hold
+    """
+    # PLAYERS IN THIS SCENE
+    #   state   each latch source state
+
+    # --- The verdict: terminal ---------------------------------------------
+    assert not any(check_transition(S.EXECUTED_OPEN, t)[0] for t in S)
+    assert S.EXECUTED_OPEN not in CLOSED_STATES
+    assert not exit_allowed(S.EXECUTED_OPEN)[0]
+    # --- The verdict: reachable from every non-terminal state ---------------
+    for state in LATCH_FROM:
+        assert check_transition(state, S.EXECUTED_OPEN) == (
+            True, "open-loop authorization recorded"), state
+    assert not check_transition(S.TRAJECTORY_LOCK, S.EXECUTED_OPEN)[0]
+    assert not check_transition(S.UNREGISTERED, S.EXECUTED_OPEN)[0]
 
 
 # ===========================================================================
