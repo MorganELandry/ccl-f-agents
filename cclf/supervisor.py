@@ -119,6 +119,7 @@ THE PLAYBILL (what happens in this file)
         Scene 5   _lowerings, _classification_stable
                                            D8: no lowering of caution since review
         Scene 6   coherence                the Layer 4 coherence score (D3)
+        Scene 6b  operational_support      weakest link over critical claims (D10)
         Scene 7   architecture_check, unverified_preconditions
                                            the Layer 0 voids a runtime can see (D9),
                                            and the AP.2-AP.8 it cannot check
@@ -449,6 +450,17 @@ class Settings:
     #   SPEC_THRESHOLD_DEFAULTS is set above its default; the Supervisor logs
     #   it with the settings when it is created.
     threshold_rationale: str = ""
+    # criticality_scheme: the domain's own criticality classification, named
+    #   with its source standard (for example "NASA Criticality 1",
+    #   "MIL-STD-882E Severity Category 1", "ISO 26262 ASIL D"). CCL-F does
+    #   not define criticality; it adopts the domain's scheme, and each
+    #   critical claim records the standard its rating comes from (Layer 4,
+    #   Coherence Score, "What counts as critical is domain-configured",
+    #   October 2026). The runtime's critical claims are the high-consequence
+    #   signals (D9); this field records which standard that rating answers
+    #   to, and operational_support (ACT VIII, Scene 6b) reports it. Empty
+    #   means no scheme has been registered.
+    criticality_scheme: str = ""
 
     def __post_init__(self) -> None:
         """
@@ -4146,7 +4158,12 @@ class Supervisor:
         a running assessment of how much epistemic confidence the current
         decision state actually warrants." The five factor names and weights
         are the spec's (COHERENCE_WEIGHTS); the spec calls the weights
-        "provisional and illustrative" and gives no formulas.
+        "provisional and illustrative" and gives no formulas. Since October
+        2026 the spec also calls the weighted-sum form provisional: a sum
+        lets strong factors offset a failed critical item. This runtime
+        holds critical items at the irreversible gate instead, and
+        operational_support (Scene 6b) reports the weakest link; read the
+        score together with it.
 
         IMPLEMENTATION DECISION D3, the factor formulas:
           open_loops                1 - (signals open, in trajectory_lock
@@ -4263,6 +4280,86 @@ class Supervisor:
         # and compare predictably in tests and audit entries.
         score = sum(COHERENCE_WEIGHTS[k] * v for k, v in factors.items())
         return round(score, 4), {k: round(v, 4) for k, v in factors.items()}
+
+    # =======================================================================
+    # ACT VIII, SCENE 6b — THE WEAKEST LINK
+    # Operational support per critical claim; critical claims are not averaged.
+    # =======================================================================
+
+    def operational_support(self, decision_id: str) -> dict:
+        """
+        Operational support for each critical claim of a decision, and the
+        weakest link among them.
+
+        Enter:   decision_id   the decision
+        Exit:    a dict:
+                   scheme        Settings.criticality_scheme ("" if none)
+                   claims        signal_id -> {"support", "evidence_closures",
+                                 "closures"} for each critical claim
+                   zero_support  ids of critical claims with no evidence-closed
+                                 support (operational support 0), sorted
+                   weakest       the least-supported critical claim's id, or
+                                 None when the decision has none
+                   weakest_support  its support, or None
+                 Raises TransitionRefused for an unknown decision. Changes
+                 nothing and writes no audit entry.
+
+        Spec: Layer 4, Coherence Score (October 2026): "the operational
+        coherence of a decision is bounded by the lowest operational
+        coherence among its critical claims", and Narrative Coherence and
+        Operational Coherence, "Zero operational support": for a given
+        claim, operational coherence reaches zero "when no evidence-closed
+        loops remain backing the claim, that is, when every closure
+        supporting it is an authority closure". The spec carries two
+        candidate structures forward: a minimum rule inside the score, or
+        critical items as a gate requirement. This runtime already holds
+        critical items at the irreversible gate (constraint and anomaly
+        loops evidence-closed, weakest link), which is the second
+        structure; this method reports the same rule as a number, so the
+        weighted coherence score is never read as covering a failed
+        critical claim.
+
+        IMPLEMENTATION DECISION (operational support of a claim): the
+        critical claims are the decision's high-consequence signals (D9).
+        A claim's support is its chain-sound evidence closures divided by
+        its real closures (attempted closures left out); the accepting
+        agent's evidence does not count, as in the coherence score. A
+        critical claim with no real closure has support 0: nothing
+        evidence-closed backs it. Every closure act counts separately,
+        however close together in time (October 2026 coding rule).
+        Supersession by an EES, which the gate also accepts for these
+        loops, is not a closure and is not counted here.
+        """
+        # PLAYERS IN THIS SCENE
+        #   d          the decision
+        #   excluded   producers whose evidence cannot count (the acceptor)
+        #   claims     signal_id -> its support record
+        #   real       a signal's real (not attempted-only) closures
+        #   evid       how many of them are chain-sound evidence closures
+        #   weakest    the least-supported claim, ties broken by id
+
+        d = self._decision(decision_id)
+        excluded = frozenset({d.accepted_by}) if d.accepted_by else frozenset()
+        claims: dict[str, dict] = {}
+        for s in self._decision_signals(d):
+            if not s.high_consequence:
+                continue
+            real = [c for c in s.closures if not c.attempted_only]
+            evid = sum(1 for c in real if self._closure_sound(c, s, frozenset(), excluded))
+            claims[s.signal_id] = {
+                "support": round(evid / len(real), 4) if real else 0.0,
+                "evidence_closures": evid,
+                "closures": len(real),
+            }
+        zero = sorted(k for k, v in claims.items() if v["evidence_closures"] == 0)
+        weakest = min(sorted(claims), key=lambda k: claims[k]["support"]) if claims else None
+        return {
+            "scheme": self.settings.criticality_scheme,
+            "claims": claims,
+            "zero_support": zero,
+            "weakest": weakest,
+            "weakest_support": claims[weakest]["support"] if weakest else None,
+        }
 
     # =======================================================================
     # ACT VIII, SCENE 7 — IS THE STAGE ITSELF SOUND?
