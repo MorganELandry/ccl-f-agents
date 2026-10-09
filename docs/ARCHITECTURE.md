@@ -57,6 +57,8 @@ any non-terminal state → executed_open (terminal)
 
 `trajectory_lock` stays in the machine (and in the TLA+ table) for analyses that find lock-in, but the runtime no longer produces it: an override now latches into `executed_open` and records no lock-in closure.
 
+Since October 2026 the draft types lock. **Lock by override:** revision capacity still existed, and may even have produced a revision (a registered recommendation, an open dissent), but an authorization reversed or foreclosed it; Challenger is the draft's case. **Lock by exhaustion:** no one could any longer revise before execution. Lock describes which states can still be reached, not the outcome, and its irreversibility comes from the blocked transitions, not from the continuous dynamics. The runtime's refusal of improper overrides (structural-review holds, Layer 0 voids, the acceptor overriding its own gate) is what keeps a decision from reaching lock by override.
+
 Blocked, each with a named reason:
 
 - closing a signal before it is classified or before review opens;
@@ -146,6 +148,8 @@ The draft's five factors and provisional weights are used as given:
 - authority compression .10
 
 The factor formulas are D3. Closure quality counts each reopen as a closure that did not hold.
+
+The draft now calls the weighted-sum form provisional, not just the weights: a sum lets strong factors offset a failed critical item. It carries two candidate structures forward, a minimum rule inside the score or critical items as a gate requirement. The runtime already implements the second at the irreversible gate (constraint and anomaly loops evidence-closed). `Supervisor.operational_support` reports the same rule as a number (D10): for each critical claim, chain-sound evidence closures over real closures; any claim at zero is named, and the least-supported claim is the decision's weakest link. The domain's criticality scheme is recorded in `Settings.criticality_scheme`, since the draft adopts each domain's own classification rather than defining one.
 
 ## Execution gates (Layer 4)
 

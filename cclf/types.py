@@ -190,6 +190,14 @@ class CommitmentState(str, Enum):
                        The runtime no longer produces it at an override
                        (see EXECUTED_OPEN); the state and its transition
                        stay in the machine for analyses that find lock-in.
+                       Since October 2026 the spec types lock: by override
+                       (revision capacity existed, even produced a
+                       revision, and an authorization reversed or
+                       foreclosed it; Challenger) or by exhaustion (no one
+                       could any longer revise before execution). Lock
+                       describes reachability, not outcome. The runtime's
+                       refusal of improper overrides is what stands
+                       between an open decision and lock by override.
       EXECUTED_OPEN    terminal and distinct from closure: the POST-EXECUTION
                        LATCH. "When an irreversible decision executes under
                        an open-loop authorization, every loop it depends on

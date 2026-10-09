@@ -42,6 +42,18 @@ open (tests/test_scenarios.py, Scene 7). No Emergency Justification is
 available: the recurrence, authority-count and suppression reviews record
 failures of the coordination process, not conditions of the world.
 
+How the draft now reads the night (October 2026): the lock came by override,
+not by exhaustion. Hours before Kilminster's authorization the organization
+had revised toward stopping (the no-launch recommendation, which Kilminster
+first held to), and the authorization reversed it on data already presented.
+Accumulated rigidity (the waiver chain, the closeout entries) made override
+the easy path. The draft also applies a weakest-link rule to critical claims:
+the field joint was NASA Criticality 1, and the claim that it would seal at
+the forecast temperature had no evidence-closed support, so its operational
+support was zero whatever the state of every other system. The runtime
+reports this through Supervisor.operational_support; refusing the override
+is what keeps the replay from reaching lock by override.
+
 (Before October 2026 the override went through: the launch executed, and
 the open constraints, escalated by then, were listed as still open but
 latched into nothing.)
@@ -240,7 +252,8 @@ CHALLENGER: list[dict] = [
      "by": "nasa"},
     {"op": "accept_decision", "decision_id": "launch-51L", "by": "kilminster",
      "rationale": "reversed recommendation written out and delivered to NASA",
-     "note": "Revision Rigidity and Trajectory Lock: Kilminster's authorization act"},
+     "note": "Revision Rigidity and Trajectory Lock: Kilminster's authorization act, "
+             "the act the draft now types as lock by override (October 2026)"},
     {"op": "request_execution", "decision_id": "launch-51L", "by": "kilminster",
      "note": "the gate as it would have stood"},
     {"op": "request_execution", "decision_id": "launch-51L", "by": "kilminster",

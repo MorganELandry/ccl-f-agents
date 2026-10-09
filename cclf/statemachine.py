@@ -86,7 +86,8 @@ TRANSITIONS: dict[tuple[S, S], str] = {
     (S.UNDER_REVIEW, S.CLOSED_ROLE_SWITCH): "same agent, different role",
     (S.UNDER_REVIEW, S.SUPPRESSED):        "signal lost operational visibility",
     (S.UNDER_REVIEW, S.ESCALATED):         "an Escalation Condition met",
-    (S.UNDER_REVIEW, S.TRAJECTORY_LOCK):   "revision capacity exhausted",
+    (S.UNDER_REVIEW, S.TRAJECTORY_LOCK):   ("revision overridden or exhausted before "
+                                            "irreversible execution"),
     # recovery
     # (the spec's RECOVERY TRANSITIONS: back into review)
     (S.ESCALATED, S.UNDER_REVIEW):         ("review resolved as its trigger requires; "
