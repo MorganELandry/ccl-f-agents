@@ -77,7 +77,7 @@ See [docs/SWARM.md](docs/SWARM.md).
 ```bash
 python run_swarm.py simorg --script pressured --defect            # held by the gate
 python run_swarm.py simorg --script pressured --defect --no-gate  # vehicle lost
-python run_swarm.py simorg --brain claude --model claude-sonnet-5-5 --compare --seeds 10
+python run_swarm.py simorg --brain claude --model claude-sonnet-5-5 --compare --seeds 10 --approve-all
 ```
 
 ## Formal verification

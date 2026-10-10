@@ -99,6 +99,12 @@ STRUCTURAL_OPS = frozenset({
     "grant", "revoke", "assign_scope",
 })
 
+# Acts that are independent checks on someone else's work. The author's
+# decision (October 2026): instances of one model are never independent of
+# each other, so no model-run agent performs these, whatever its kind; a
+# person (or a unit) does, through ask_human.
+INDEPENDENT_CHECK_OPS = frozenset({"attest_risk_evidence", "resolve_review"})
+
 # Agent kinds with obligation capacity (a ROLE also needs a successor;
 # the supervisor checks that itself).
 CAPABLE_KINDS = frozenset({AgentKind.PERSON, AgentKind.UNIT, AgentKind.ROLE})
@@ -135,6 +141,7 @@ class RoleSpec:
     kind: AgentKind = AgentKind.AUTOMATION
     principal: Optional[str] = None
     asks: frozenset = frozenset()
+    model_run: bool = True          # driven by a model (every swarm agent is)
 
 
 @dataclass
@@ -314,6 +321,12 @@ class Runtime:
         if op.startswith("_") or op in STRUCTURAL_OPS:
             return self._record(agent, op, args, f"REFUSED: {op} is world set-up, not an "
                                                   f"agent operation", True)
+        if op in INDEPENDENT_CHECK_OPS and role.model_run:
+            hint = (f" Use ask_human: a person answers {op}." if op in role.asks
+                    else " A person must perform it.")
+            return self._record(agent, op, args, f"REFUSED: {op} is an independent check, and "
+                                "instances of one model are never independent of each other "
+                                f"(docs/DECISIONS.md, S4).{hint}", True)
         if op not in role.ops:
             return self._record(agent, op, args, f"REFUSED: the {role.title} role may not "
                                                   f"perform {op}. Allowed: "

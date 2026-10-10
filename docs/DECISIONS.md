@@ -4,14 +4,70 @@ The CCL-F v0.2 working draft names many thresholds and tests without giving valu
 
 The configurable values live in `Settings` (`cclf/supervisor.py`). A caller can pass different values per `Supervisor`.
 
+## Status against the current draft (October 10, 2026)
+
+Every entry below was checked against the author's current copy of the draft. That copy is newer than the one the code was first written against: it adds the weakest-link rule for coherence, the clarification of trajectory lock, Challenger as lock by override, and the growth-shape hypothesis.
+
+**Author's decisions made in the review**
+
+| # | Question | Decision | State |
+|---|---|---|---|
+| A1 | Which form of the weakest-link rule? | Cap the score at the lowest critical item | Built (D3) |
+| A2 | Can instances of one model be independent of each other? | Never | Built (S4) |
+| A3 | How is an override recorded when it goes ahead over a revision already on record (an open dissent, a no-go)? | Direction: it creates a lock, under strict rules for when dissent can be overridden, preferably hard evidence or an independent third-party review | **Held** for discussion; no code |
+| A4 | How is contested closure recorded (one party closes by authority, another holds the loop open)? | Direction: a ranking of what takes priority (safety over schedule), set by industry and aimed at preventing loss of life, property and money; then a negotiation over how the lower-ranked item (e.g. schedule) adjusts to meet the higher | **Held** for discussion; no code |
+
+A3 is also a contradiction inside the draft. Layer 4 says the runtime refuses overrides that would produce `trajectory_lock`. Revision Rigidity says Challenger is lock by override. The escalation list still names lock-in. The code follows Layer 4. Until A3 is settled, an override over dissent that meets the independence rules is recorded as handled correctly.
+
+**Already stated by the draft (these entries can be relabeled "draft states"):**
+- **Labelled decisions:** D1, D2 (except whether the condition was met, which is open by design), D4 to D8, and D9's "unverified" reporting.
+- **Evidence and closure:** EES by kind and producer; the acceptor excluded; nominal needs a cited EES; supersession; every cited item load-bearing.
+- **Layer 0:** the core of Agent Admissibility; a successor must be someone else.
+- **Escalation:** resolution by trigger; Rule 8 Effect; recovery only through resolution; thresholds.
+- **Exits:** the nine exits that leave a loop open; how constraint loops are resolved; re-entry by exit type.
+- **Gates:** cumulative classes; voids; acknowledged and documented loops; recurrence; unresolved reviews; suppressed signals; overrides (separation, which reviews hold, who may not resolve, the latch); Emergency Justification; risk claim and attestation; Execution Class Assignment.
+- **Authority:** roots optional.
+- **Federation:** a relaying node is never the producer; origins attested.
+- **Model use:** never nominal.
+- **Swarm:** S2, S5, S7, S9, S10 (who produces evidence), S14, S15, S16 (Odoo, pushed release), S17, S18.
+
+**Still out of date with the draft (code fixes waiting):**
+- **S6.** The worlds register no authority, but R5.1 says responsibility and authority must be registered together.
+- **S8.** Identity is not tied to a pinned model version.
+- **S16.** The rollback check runs on the working tree, not the accepted one. An Odoo dry run is recorded as executed.
+
+**Author calls not yet made:**
+- **D3:** whether the draft should name a default coherence threshold (the code uses 0.6).
+- **D9:** what "high-consequence" means. It could reuse the new criticality marking.
+- **Role switch:** an explicit change of referent, or any self-closure by the registrant without qualifying evidence.
+- **Independent reviewer:** of a role switch, or the full Overrides independence test.
+- **Unregistered closure boundary:** no limit, or a gap the gate reports.
+- **Frame adoption:** who may adopt a frame.
+- **Late dependencies:** anyone may register one, or only the evidence's producer (the literal text).
+- **Admissibility scope:** whether overrides, Emergency Justifications and review resolution also need obligation capacity (the code says yes).
+- **A rejected nominal classification:** recorded as elevated uncertainty, or left unclassified.
+- **Rule 8 Scope:** whether "the level" applies to every count-based review or to recurrence only.
+- **Emergency count:** reset by any structural review, or by a Rule 7 review only.
+- **Legal re-entry:** whether an order that compels action re-enters.
+- **Remote closure:** whether it needs a registered AP.3 boundary agreement.
+- **S3:** simulated agents registered as PERSON, as a new "simulated person" kind, or as automation.
+- **S10:** whether a deterministic re-run counts as new evidence (the code says no); whether every closure needs an "it bears on the claim" attestation.
+- **S11:** whether world prechecks belong in the gate, become registered constraint signals, or enter the draft as "domain-registered preconditions".
+- **S13:** whether the gate should read what evidence says.
+- **S20:** whether elevated uncertainty, like nominal, needs an EES when it departs from off-envelope.
+
+**Open by design (cannot be settled at 0.2):** the coherence weights and factor formulas (0.3 and later), whether evidence is really new (a runtime cannot read content), whether a re-entry condition was met, entering trajectory lock by exhaustion (needs the Revision Rigidity Index), tractability scoring, and the time-decay and trajectory mathematics.
+
+**Engineering only (no theory call):** see S20 and the review notes. The main items are state carried across runs (Rules 7 and 8), outcome scoring for AP.7, messaging registered as a channel, the safety-board channel, observer routes to a person, AP.6 reporters in every world, and rounds as a clock.
+
 ## Labelled decisions
 
 | ID | Draft says | This runtime | Where |
 |---|---|---|---|
 | **D1** | Rule 7: "at its third occurrence, unless the domain registers another count" (stated default since October 2026) | **3** members of a recurrence group, the draft's default. Raising it needs `Settings.threshold_rationale`. | `Settings.recurrence_threshold` |
 | **D2** | Containment, deferred and ambiguity exits re-enter "when the resolution condition registered at exit is met" (settled in the draft, October 2026) | The runtime cannot observe the condition, so `reenter(..., condition_met=True)` is the re-entering agent's stated claim, logged with the condition it answers. With no condition registered, re-entry is refused, and the refusal says to re-register the concern as a new signal linked to the exited one. | `statemachine.reentry_allowed` |
-| **D3** | Coherence score: five factors with provisional weights, a "domain-configured threshold", and no formulas | **Threshold 0.6.** Factor formulas: <ul><li>**open loops:** 1 − (open or latched signals ÷ signals). Trajectory lock and executed_open count as open.</li><li>**classification stability:** the share of signals that pass D8.</li><li>**closure quality:** chain-sound evidence closures ÷ (real closures + reopens); 1.0 when there are neither. The decision's accepting agent's evidence does not count.</li><li>**recurrence pressure:** 1 − the largest min(1, members ÷ threshold) over the decision's unreviewed groups.</li><li>**authority compression:** 1 − the largest share of all real closures that are one agent's non-evidence closures (an evidence closure that is not chain-sound counts as non-evidence); 1.0 with fewer than two real closures.</li></ul> | `Supervisor.coherence` |
-| **D4** | A "minimum evidence closure ratio" for irreversible execution over the uncertainty, dissent, classification and framing signals: "the share closed by chain-sound evidence closure meets the domain-configured minimum (one half by default), and none remains open" | **0.5** (the draft's default) of those **signals** (open ones count in the denominator) currently closed by a chain-sound evidence closure; separately, none left open (closed by any type, or exited terminal or superseded). Met when there are no such signals. | `Settings.min_evidence_closure_ratio` |
+| **D3** | Coherence score: five factors with provisional weights, a "domain-configured threshold", and no formulas. Since October 2026 the weighted sum's form is provisional too: "the operational coherence of a decision is bounded by the lowest operational coherence among its critical claims", and what counts as critical is domain-configured | **Threshold 0.6.** Factor formulas: <ul><li>**open loops:** 1 − (open or latched signals ÷ signals). Trajectory lock and executed_open count as open.</li><li>**classification stability:** the share of signals that pass D8.</li><li>**closure quality:** chain-sound evidence closures ÷ (real closures + reopens); 1.0 when there are neither. The decision's accepting agent's evidence does not count.</li><li>**recurrence pressure:** 1 − the largest min(1, members ÷ threshold) over the decision's unreviewed groups.</li><li>**authority compression:** 1 − the largest share of all real closures that are one agent's non-evidence closures (an evidence closure that is not chain-sound counts as non-evidence); 1.0 with fewer than two real closures.</li></ul> <ul><li>**weakest-link cap** (author's decision, October 2026: cap the score): a failure mode listed in `Architecture.critical` (with the standard its criticality comes from) is critical. Each critical signal scores 1 if resolved as the irreversible gate resolves a constraint loop, else 0; the score is min(weighted sum, lowest critical item), reported as `critical_floor`. Nothing critical means no cap.</li></ul> | `Supervisor.coherence`, `Architecture.critical` |
+| **D4** | A "minimum evidence closure ratio" for irreversible execution over the uncertainty, dissent, classification and framing signals: "the share closed by chain-sound evidence closure meets the domain-configured minimum (one half by default), and none remains open" | **0.5** (the draft's default) of those **signals** (open ones count in the denominator) currently closed by a chain-sound evidence closure; separately, none left open (closed by any type, or exited as superseded; the draft counts a terminal exit as open for this test, and so does the code). Met when there are no such signals. | `Settings.min_evidence_closure_ratio` |
 | **D5** | Authority closures on an irreversible decision: "escalates once it exceeds one" (stated default since October 2026) | Escalate when the count **exceeds 1**, that is, on the second authority closure. Fires once per decision. | `Settings.authority_closure_threshold` |
 | **D6** | AP-G threshold: three, now stated and defended in the draft (Layer 2, AP-G threshold) | **3**. Only unsupported discounts count toward it (`unsupported_discounts`); every discount is still logged and counted in `discounts`. | `Settings.sender_discount_threshold` |
 | **D7** | "Stable or improving accuracy rate", on scored outcomes: with four or more, later half no less accurate than the earlier half (odd count: the later half takes the extra) and overall at least one half; with one to three, overall at least one half only; none means a discount is unsupported. An outcome counts only if scored by a party meeting the EES test with respect to the discounting agent, and confirmed or refuted by an EES | The runtime implements the definition. An outcome (`record_signal_outcome(..., evidence_ids=...)`) counts only if it cites at least one item of an eligible kind not produced by its scorer (the scorer is the claimant), and, when a discount by X is judged, outcomes X scored are ignored. **No counted outcome means the discount is unsupported**, so it escalates. | `Supervisor.accuracy_stable_or_improving`, `_counted_outcomes`, `discount_supported_by_record` |
@@ -147,7 +203,7 @@ The swarm puts live models in front of the supervisor (see [SWARM.md](SWARM.md))
 - **S1. One supervisor per world is one organization.** Layer 4 is one supervisory automaton per coordination system. All agents in a world sit under one runtime and one supervisor, so they are inside one authority boundary. Autonomy-Bounded Closure applies within it only through closure authority (S15), not across organizations. Cross-organization autonomy, where the loop between two systems stays irreducibly open, is what `cclf/federation.py` models. It isn't wired into the swarm. (`runtime.py`, `Runtime.__init__`)
 - **S2. Agent kind is declared by the world.** Agent Admissibility makes obligation capacity a property of the agent. In the release and Odoo worlds, models are registered AUTOMATION: probabilistic automation, the draft's term since September 2026, which the docs shorten to "agents". The runtime refuses them every obligation-creating act (`OBLIGATION_OPS`, overrides, Emergency Justifications) and offers `ask_human` instead, for only the acts a role lists in `RoleSpec.asks`. This implements the AI Applications point that "the AI is responsible" is not a stewardship assignment.
 - **S3. Simulated-org agents are PERSON by stipulation.** The draft: "An instrument or a model version can accumulate an accuracy record, and cannot accept an obligation." The simulated org registers its four role-players as PERSON so the gate's obligation rules can be exercised. That is a simulation fiction, not a claim. Run for real, the same set-up would be an AP-A void. The world's docstring and SWARM.md say so, and results there speak to gate behaviour, not to how an AI deployment is architected. (`worlds/simorg.py`, `roles()`)
-- **S4. Independence among same-model agents is organizational only.** The draft's independence conditions for overrides and review resolution are organizational (reporting lines, acceptors, requesters). "No shared … model" applies to evidence. In the simulated org, instances of one model attest and resolve reviews for one another, separated only by reporting lines. In the release and Odoo worlds these acts go to people.
+- **S4. Instances of one model are never independent.** Author's decision, October 2026. The draft's independence conditions for overrides and review resolution are organizational, and "no shared … model" applies to evidence. The author ruled that instances of one model are never independent of each other, for checks as well as evidence. No model-run agent may attest risk evidence or resolve a structural review, in any world, whatever its kind (`INDEPENDENT_CHECK_OPS`, `RoleSpec.model_run`). These acts go to a person through `ask_human`. In the simulated org that person is the safety board, a registered unit. An unattended run (`--compare`) has no person to answer, so it needs `--approve-all`, and the board must then be reported as a rubber stamp. (Previously: separated only by reporting lines.)
 - **S5. The simulated org's review board is an oracle.** The draft counts evaluation "by a party whose errors cannot share a cause" as qualifying. `request_independent_review` returns the ground truth whatever question it is asked, and the board is registered as an instrument. It is an idealized External Evidence Source. An LLM-backed board would fail the EES test. Report runs with and without it.
 
 ### The runtime's guardrails

@@ -1210,6 +1210,10 @@ class Architecture:
       interested_parties  failure mode -> parties structurally interested in
                           denying it                       (AP-F: Captured
                                                             Channel)
+      critical            failure mode -> the standard its criticality is
+                          taken from, e.g. "MIL-STD-882E Cat I" (Layer 4,
+                          Coherence Score: "What counts as critical is
+                          domain-configured", sourced from a standard)
 
     Every field uses field(default_factory=dict) so each Architecture gets
     its own empty dict (see READER'S NOTE above).
@@ -1221,5 +1225,7 @@ class Architecture:
     reporters: dict[str, set[str]] = field(default_factory=dict)
     # failure mode -> parties structurally interested in denying it
     interested_parties: dict[str, set[str]] = field(default_factory=dict)
+    # failure mode -> the standard its criticality comes from (weakest-link cap)
+    critical: dict[str, str] = field(default_factory=dict)
 
 # EXEUNT — end of file.

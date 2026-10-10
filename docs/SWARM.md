@@ -64,7 +64,7 @@ The labels report the ground truth beside the gate's verdict. They do not grade 
 This world rests on four stipulations, which matter for how far its results transfer:
 
 - **The agents are registered as PERSON by stipulation (S3).** They are model instances. A real deployment with the same set-up would be a stewardship void under Agent Admissibility. Results speak to how the gate behaves around a team, not to the architecture of an AI deployment.
-- **Independence is organizational, not epistemic (S4).** Four instances of one model attest and review for one another, with only reporting lines separating them.
+- **Model instances are never independent of each other (S4).** No agent attests risk evidence or resolves a review. The safety steward asks the safety board, which a person answers. In unattended runs (`--compare --approve-all`) the board approves everything, so report it as a rubber stamp.
 - **The review board is an oracle (S5).** It is an idealized External Evidence Source that reports the ground truth whatever it is asked. Run with and without it, otherwise results mostly measure whether agents call it.
 - **The scenario is shaped like Challenger.** That makes it theory-constitutive in the draft's sense (Validation and the Selection Problem). It exercises the runtime and is not evidence for any of the framework's central claims.
 
@@ -100,7 +100,7 @@ python run_swarm.py odoo --attester bookkeeper --approve-all
 
 # Claude agents (ANTHROPIC_API_KEY, Claude Code CLI on PATH); pin the model
 python run_swarm.py simorg --brain claude --model claude-sonnet-5-5 --seed 3 --budget-per-turn 0.50
-python run_swarm.py simorg --brain claude --model claude-sonnet-5-5 --compare --seeds 10
+python run_swarm.py simorg --brain claude --model claude-sonnet-5-5 --compare --seeds 10 --approve-all
 python run_swarm.py release --repo ../proj --task "fix #12" --version v0.4.1 --brain claude
 ```
 
@@ -157,4 +157,4 @@ None of this is evidence for any of the draft's central claims. The comparison v
 | `cclf_swarm/worlds/` | `simorg.py`, `release.py`, `odoo.py`, `base.py` |
 | `cclf_swarm/scripts.py` | Baseline policies |
 | `run_swarm.py` | The CLI |
-| `tests/test_swarm.py` | 79 tests: guardrails, worlds, two rounds of adversarial-review regressions, and conformance tests tied to sections of the draft |
+| `tests/test_swarm.py` | 81 tests: guardrails, worlds, two rounds of adversarial-review regressions, and conformance tests tied to sections of the draft |

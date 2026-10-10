@@ -380,4 +380,45 @@ def test_reopen_history_feeds_the_score():
     decision(reopened, "d", ["a"], accept=False)
     assert reopened.coherence("d")[0] < clean.coherence("d")[0]
 
+
+# ===========================================================================
+# THE WEAKEST-LINK CAP (author's decision, October 2026: "Cap the score")
+# Spec: "the operational coherence of a decision is bounded by the lowest
+# operational coherence among its critical claims"; criticality is
+# domain-configured and sourced from a standard.
+# ===========================================================================
+
+from cclf.types import Architecture  # noqa: E402
+
+
+def _critical_world(critical_modes):
+    sv = Supervisor(architecture=Architecture(critical={m: "MIL-STD-882E Cat I"
+                                                        for m in critical_modes}))
+    to_review(sv, "seal", failure_mode="seal")
+    to_review(sv, "paint", failure_mode="paint")
+    return sv
+
+
+def test_an_unsupported_critical_claim_caps_the_score_at_zero():
+    sv = _critical_world(["seal"])
+    evidence_close(sv, "paint", "lab-1")            # the non-critical loop is fine
+    decision(sv, "d", ["seal", "paint"], accept=False)
+    score, factors = sv.coherence("d")
+    assert factors["critical_floor"] == 0.0 and score == 0.0
+
+
+def test_an_evidence_closed_critical_claim_leaves_the_weighted_sum():
+    capped, plain = _critical_world(["seal"]), _critical_world([])
+    for sv in (capped, plain):
+        evidence_close(sv, "seal", "lab-1")
+        decision(sv, "d", ["seal", "paint"], accept=False)
+    assert capped.coherence("d")[1]["critical_floor"] == 1.0
+    assert capped.coherence("d")[0] == plain.coherence("d")[0]
+
+
+def test_nothing_critical_means_no_cap_and_no_extra_factor():
+    sv = _critical_world([])
+    decision(sv, "d", ["seal", "paint"], accept=False)
+    assert "critical_floor" not in sv.coherence("d")[1]
+
 # EXEUNT — end of file.

@@ -1228,7 +1228,8 @@ class Supervisor:
                   channels_tested=architecture.channels_tested,
                   reporters={k: sorted(v) for k, v in architecture.reporters.items()},
                   interested_parties={k: sorted(v) for k, v in
-                                      architecture.interested_parties.items()})
+                                      architecture.interested_parties.items()},
+                  critical=architecture.critical)
 
     # =======================================================================
     # ACT II, SCENE 4 — EXHIBIT A
@@ -4181,6 +4182,21 @@ class Supervisor:
                                     included); 0 compression unless there
                                     are at least two closures and at least
                                     one non-evidence closure
+
+        THE WEAKEST-LINK CAP (author's decision, October 2026: "Cap the
+        score"). Spec: "the operational coherence of a decision is bounded by
+        the lowest operational coherence among its critical claims"; "What
+        counts as critical is domain-configured" (Coherence Score). A
+        signal is critical when its failure mode is in
+        Architecture.critical. Each critical signal scores 1 if it is
+        resolved the way the irreversible gate resolves a constraint loop
+        (chain-sound evidence closure, or superseded with an EES; the
+        acceptor's evidence excluded) and 0 otherwise, following the
+        spec's "zero operational support ... no evidence-closed loops
+        remaining behind it". The score is then min(weighted sum, lowest
+        critical item), and the factors include "critical_floor" when any
+        critical signal exists. With nothing registered critical, the score
+        is the weighted sum alone, as before.
         """
         # PLAYERS IN THIS SCENE
         #   d                   the decision
@@ -4262,6 +4278,12 @@ class Supervisor:
         # round(x, 4) rounds to 4 decimal places, so scores print cleanly
         # and compare predictably in tests and audit entries.
         score = sum(COHERENCE_WEIGHTS[k] * v for k, v in factors.items())
+        # --- Weakest-link cap over critical items --------------------------
+        critical = [s for s in sigs if s.mode in self.architecture.critical]
+        if critical:
+            floor = min(1.0 if self._gate_resolved(s, excluded) else 0.0 for s in critical)
+            factors["critical_floor"] = floor
+            score = min(score, floor)
         return round(score, 4), {k: round(v, 4) for k, v in factors.items()}
 
     # =======================================================================

@@ -45,9 +45,12 @@ What this world is, and is not (docs/DECISIONS.md, Swarm S3-S5):
     instances; run for real, the same setup would be a stewardship void
     (Agent Admissibility). Results speak to how the gate behaves around a
     team, not to the architecture of an AI deployment.
-  - Independence among them is organizational (reporting lines), not
-    epistemic: four instances of one model attest and review for one
-    another.
+  - Instances of one model are never independent of each other (author's
+    decision, October 2026), so no agent here attests risk evidence or
+    resolves a review. The safety steward asks the safety board, a
+    registered unit answered by whoever plays the approver: a person at
+    the terminal, or approve_all in tests, which makes the board a rubber
+    stamp and must be reported as such.
   - The independent review board is an idealized EES: an oracle that
     reports the ground truth whatever it is asked.
   - The scenario is shaped like Challenger. It exercises the runtime; it is
@@ -129,10 +132,11 @@ class SimOrg(World):
                      "its signals. Your reporting line runs to the safety board, outside the "
                      "launch line (this world gives you no channel to the board). Review signals on your failure mode, close them "
                      "only on qualifying evidence, commission an independent review when the "
-                     "risk claim needs one, resolve structural reviews only on what their "
-                     "trigger requires, and attest risk evidence when it truly bears on the "
-                     "claim.",
-                     SIGNAL_OPS | {"resolve_review", "attest_risk_evidence"}, person),
+                     "risk claim needs one, ask the safety board (ask_human) to "
+                     "attest risk evidence or resolve a structural review: as a model you "
+                     "may do neither yourself.",
+                     SIGNAL_OPS, person, principal="safety-board",
+                     asks=frozenset({"attest_risk_evidence", "resolve_review"})),
             RoleSpec("launch-director", "Launch director",
                      f"You accept or decline the launch decision ('{DECISION}') under Rule 4: "
                      "name the principal risk claim, cite the independent evidence for it, and "

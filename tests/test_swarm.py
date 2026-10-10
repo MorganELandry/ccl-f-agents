@@ -595,6 +595,23 @@ def test_provenance_not_content_a_diligent_team_can_launch_into_the_defect():
     assert out["report"]["outcome"] == "unsafe launch: vehicle lost"
 
 
+def test_no_model_run_agent_attests_or_resolves_a_review():
+    # Author's decision (October 2026): instances of one model are never independent.
+    rt = Runtime(SimOrg(defect=False), approver=approve_all)
+    out = act(rt, "safety-steward", "attest_risk_evidence", decision_id="d", rationale="r")
+    assert out.startswith("REFUSED") and "never independent" in out
+    assert act(rt, "safety-steward", "resolve_review", review_id="R1",
+               finding="x").startswith("REFUSED")
+
+
+def test_the_safety_board_attests_in_the_simulated_org():
+    out, rt = run(SimOrg(defect=False), scripts.simorg_diligent())
+    assert out["report"]["outcome"] == "safe launch"
+    via = entries_named(rt, "RUNTIME_ACT_VIA_PERSON")
+    assert [e.actor for e in via] == ["safety-board"]
+    assert rt.sup.decisions["launch-kestrel"].risk_attestation.by == "safety-board"
+
+
 # ===========================================================================
 # ACT VI — THE CLAUDE BRAIN AND ORCHESTRATOR, WITH A FAKE query()
 # ===========================================================================

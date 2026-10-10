@@ -181,6 +181,9 @@ def main() -> None:
     if args.compare:
         if args.world != "simorg":
             raise SystemExit("--compare is for simorg")
+        if not args.approve_all:
+            raise SystemExit("--compare runs unattended, so the safety board (a person) cannot "
+                             "answer; pass --approve-all and report the board as a rubber stamp")
         summary = asyncio.run(compare(args))
         print(json.dumps(summary, indent=2))
         return
