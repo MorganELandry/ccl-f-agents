@@ -137,3 +137,66 @@ The draft's Rule 4 asks that a single agent "explicitly accept authorization"; i
 ### Model use
 
 - **The advisor only proposes.** It suggests a signal type and operational state for a free-text report. The supervisor applies Rule 2 to its proposal as to anyone's. If the model is unavailable or its reply is unusable, the proposal falls back to uncertainty with elevated uncertainty, never nominal.
+
+## Swarm (`cclf_swarm/`)
+
+The swarm puts live models in front of the supervisor (see [SWARM.md](SWARM.md)). It was checked against the v0.2 working paper section by section (October 2026). Where the draft is silent, or written for human organizations, the swarm had to choose. These are the choices, tagged `S1`–`S20`. Where a check found the swarm contradicting the draft, the code was changed instead, and the entry says what the draft required.
+
+### Scope and agents
+
+- **S1. One supervisor per world is one organization.** Layer 4 is one supervisory automaton per coordination system. All agents in a world sit under one runtime and one supervisor, so they are inside one authority boundary. Autonomy-Bounded Closure applies within it only through closure authority (S15), not across organizations. Cross-organization autonomy, where the loop between two systems stays irreducibly open, is what `cclf/federation.py` models. It isn't wired into the swarm. (`runtime.py`, `Runtime.__init__`)
+- **S2. Agent kind is declared by the world.** Agent Admissibility makes obligation capacity a property of the agent. In the release and Odoo worlds, models are registered AUTOMATION: probabilistic automation, the draft's term since September 2026, which the docs shorten to "agents". The runtime refuses them every obligation-creating act (`OBLIGATION_OPS`, overrides, Emergency Justifications) and offers `ask_human` instead, for only the acts a role lists in `RoleSpec.asks`. This implements the AI Applications point that "the AI is responsible" is not a stewardship assignment.
+- **S3. Simulated-org agents are PERSON by stipulation.** The draft: "An instrument or a model version can accumulate an accuracy record, and cannot accept an obligation." The simulated org registers its four role-players as PERSON so the gate's obligation rules can be exercised. That is a simulation fiction, not a claim. Run for real, the same set-up would be an AP-A void. The world's docstring and SWARM.md say so, and results there speak to gate behaviour, not to how an AI deployment is architected. (`worlds/simorg.py`, `roles()`)
+- **S4. Independence among same-model agents is organizational only.** The draft's independence conditions for overrides and review resolution are organizational (reporting lines, acceptors, requesters). "No shared … model" applies to evidence. In the simulated org, instances of one model attest and resolve reviews for one another, separated only by reporting lines. In the release and Odoo worlds these acts go to people.
+- **S5. The simulated org's review board is an oracle.** The draft counts evaluation "by a party whose errors cannot share a cause" as qualifying. `request_independent_review` returns the ground truth whatever question it is asked, and the board is registered as an instrument. It is an idealized External Evidence Source. An LLM-backed board would fail the EES test. Report runs with and without it.
+
+### The runtime's guardrails
+
+- **S6. Role allowlists and argument shapes replace authority grants.** R5.1 asks for responsibility and authority to be registered together. The draft doesn't say who may hold EXECUTE, and `Settings.authority_roots` is not set in any world, so authority is not enforced (see Authority). A role's `ops` decide what each agent may call. AUTOMATION roles (release manager, controller) hold `request_execution` while a person carries the acceptance. Arguments are type-checked against each operation's signature before the supervisor sees them, which is an implementation guard the draft is silent on. (`Runtime.act`, `_type_errors`)
+- **S7. Who answers for an acceptance.** Rule 4 needs a single agent to "explicitly accept authorization, risk acceptance, and rationale documentation". In the swarm a model drafts the risk claim and the known / assumed / uncertain text. The person sees it, with the world's own description of the effect and every open signal, and the act is performed in the person's name. A `RUNTIME_ACT_VIA_PERSON` entry in the chained trail records who asked, why, and what the person was shown. `approve_all` stands in for a person in tests and demos only. (`Runtime.ask_human`)
+- **S8. Identity is the role name, and models are recorded.** Identity persistence belongs to "models at a fixed version". An agent's identity in the audit is its role name, whatever model answers. The brain records the models that actually answered, and every run reports them. The CLI asks for `--model` so runs can be compared. Within a run this is enough for AP.7; across runs it is only as good as the pinning.
+- **S9. Agent-written evidence is model output.** The draft: "multiple LLM instances … do not constitute independent evidence." Evidence an agent adds is stored as `model_output`, produced by that agent, whatever it claims. Messages between agents never become evidence. If agent B records agent A's message as evidence, it is attributed to B. That doesn't matter for EES, because model output never qualifies, but A's authorship is lost.
+- **S10. Instruments are the only EES producers, and novelty is per measurement.** The relaying agent is not the producer (the draft: "not the agent who retrieves it"). The agent does choose what the instrument looks at (which test, which records, what question to the board), and nothing checks that the measurement covers the claim it is cited for. Repeating a measurement with the same instrument and input returns the earlier evidence instead of minting new evidence. A deterministic re-run is not new (Evidence Novelty). The base runtime cannot tell; the worlds can. (`Runtime.mint_evidence(key=...)`)
+- **S11. World prechecks are a deliberate strengthening outside CCL-F.** The draft lists which holds cannot be overridden and says "within these limits the system does not substitute its judgment for the organization's". A world's precheck holds a request before the gate runs, and no override reaches past it.
+  - Some prechecks are feasibility checks: a tag that already exists, no batch proposed.
+  - Others are policy:
+    - the latest test run failed, or ran on a tree other than the accepted one;
+    - a pushed release is gated below irreversible.
+  - These exist because the agents are models and the effects are real. They are this project's additions, not the draft's.
+  - A hold is recorded as `RUNTIME_PRECHECK_HELD` in the chained trail, and the decision is marked `ever_blocked`, so a later lowering of its class escalates exactly as it would after a gate refusal. (`World.precheck`, `Runtime._perform`)
+- **S12. The gate-off baseline exists only in a simulated world.** Why This Matters: when the gate cannot vouch, "Refuse irreversible execution". `gating=False` is refused for any world with a real effect (`World.allows_baseline`). In the simulated org, an ungated execution is recorded as `RUNTIME_UNGATED_EXECUTION`, naming the gate failures. The supervisor's own state still shows the decision blocked and unexecuted, with no latch, so a baseline run's trail is non-conforming by construction, and says so.
+- **S13. Provenance, not content.** Inherited from the base runtime: the supervisor checks where evidence came from, not what it says. A closure on a failing bench test is an evidence closure, and a diligent team can launch into a defect (`test_provenance_not_content_…`). The release world adds one content check of its own (S11). The others do not.
+- **S14. When the test-runner is an EES.** The draft requires "no shared … author" between evidence and what it evaluates.
+  - With tests protected (the default), the test-runner counts as a direct measurement. That rests on one assumption: the code under test doesn't attack the runner in the process they share, which a container doesn't remove.
+  - With `allow_test_edits` and tests changed from HEAD, a run is recorded as `internal_analysis`, never as an independent measurement. (`worlds/release.py`, `run_tests`)
+- **S15. Stewardship and closure authority come from the world.** AP.1: "Nominal or assumed ownership does not satisfy this condition. The acceptance must be registered." Autonomy-Bounded Closure: closure authority is "a structural property derivable from the coordination architecture — not a judgment".
+  - A signal's steward and successor must be agents the world registered with obligation capacity; a model cannot name a person who never accepted.
+  - Closure authority is overwritten from the world: the safety steward in the simulated org, the reviewer in the release world, the controller in the Odoo world.
+  - A closure from outside that authority is an attempted closure, which the supervisor records as a coordination event. (`Runtime.act`, `World.closure_authority`)
+
+### Classes, reviews and the end of a run
+
+- **S16. Execution classes per world.** The draft treats a decision as irreversible unless an EES shows reversal.
+  - **Odoo posting is always irreversible.** This is conservative: posting assigns a sequence number and usually notifies the customer, and reset-to-draft and credit notes are not modelled. A dry run is still recorded as executed.
+  - **A local release may be declared elevated**, with `verify_rollback` evidence. That evidence tests the revert path generically, not on the accepted tree.
+  - **A pushed release is always irreversible** (S11).
+- **S17. Reviews go to a second person.** Who may not resolve a review includes every acceptor, so `resolve_review` is routed to the second reviewer (release) or the attester (Odoo). With no second person, an escalation in those worlds is a permanent hold. The draft's remedy, an independent reviewer, then has no route, and that is reported, not worked around.
+- **S18. A run's end leaves its open loops on the record.** The draft: "An unregistered exit is structurally equivalent to a suppressed signal."
+  - When a run stops (round cap, coordinator stop, or execution), the loops still open are listed in a `RUNTIME_RUN_ENDED` entry and in the report.
+  - The runtime registers no exit for them. Choosing an exit type is the team's act, not the runtime's.
+- **S19. The orchestrator is recorded but not constrained.** Who works, and who doesn't, is a coordination act. Leaving an observer unscheduled can silence a channel. Every schedule is a `RUNTIME_SCHEDULE` entry.
+  - The Claude orchestrator has no tractability input (deferred in the draft).
+  - It can stop a run with loops open (recorded, S18).
+  - Nothing guarantees that an agent with unread messages or open signals gets a turn.
+- **S20. Not modelled yet.** Each of these is a known gap, not a claim of conformance:
+  - **Time.** Rounds are not a clock. There is no execution window or deadline, so time-window compression and trajectory lock cannot arise.
+  - **Revision rigidity.** Agents' persistent sessions are a source the draft names ("AI task-completion"), and nothing measures it.
+  - **Recurrence across runs.** Each run starts a fresh supervisor, so Rules 7 and 8 see only one run.
+  - **Source Standing.** No role scores signal outcomes, so every discount is unsupported (D7). `record_credibility_discount` was removed from the engineer, who would have been recorded as the discounter.
+  - **Loop entanglement** cannot be registered (a base-runtime gap too).
+  - **Channels.**
+    - Agent messaging is not a registered, tested channel, so AP.2 is unverified.
+    - There is no channel from the safety steward to the safety board.
+    - Observers in the release and Odoo worlds have no route of their own to the person; the approver sees their open signals, but they cannot ask.
+  - **Reporter independence.** Reporters and interested parties are registered only in the simulated org (AP.6).
+  - **Off-envelope classification** is left to the agents. The baseline scripts classify the cold launch as elevated uncertainty, and nothing flags that.
