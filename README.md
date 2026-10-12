@@ -53,6 +53,33 @@ Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - **Authority across nodes.** A power reaches a node only as a signed grant, addressed to that node, from someone who holds it there delegably. Revocations are signed too. A revocation binds only once it arrives, so grants can carry an expiry that bounds that window.
 - **An outside audit.** `audit_federation()` checks every published log and every cross-reference, and catches equivocation that no single node saw.
 
+## Live agent swarms
+
+`cclf_swarm/` puts live Claude agents (through the Claude Agent SDK) in front of the same supervisor. The agents raise signals, run instruments, close loops and ask to commit. The supervisor decides what counts, and a world's irreversible effect happens only after a permitted gate. There are three worlds:
+
+- **Simulated org:** a simulated launch decision with a hidden ground truth, so runs can be scored.
+- **Release:** real work on a git repository.
+- **Odoo invoices:** reviewing and posting draft invoices (dry run by default).
+
+The runtime adds guardrails specific to models:
+
+- **Role allowlists.**
+- **Identity binding.** The acting-agent field is always the caller.
+- **Model output never counts as evidence.** Only instruments produce evidence that can qualify.
+- **Obligations go to people.** Obligation-creating acts are routed to a person, who sees what the effect would be.
+- **A gate on/off switch** for experiments, in the simulated world only.
+- **Stewardship and closure authority** set by the world, not chosen by agents.
+
+Its choices are recorded in [docs/DECISIONS.md](docs/DECISIONS.md) under "Swarm" (S1–S20). The scripted baseline checks that the rules are enforced; it is not evidence for the framework's central claims.
+
+See [docs/SWARM.md](docs/SWARM.md).
+
+```bash
+python run_swarm.py simorg --script pressured --defect            # held by the gate
+python run_swarm.py simorg --script pressured --defect --no-gate  # vehicle lost
+python run_swarm.py simorg --brain claude --model claude-sonnet-5-5 --compare --seeds 10 --approve-all
+```
+
 ## Formal verification
 
 The state machine and the closure and Layer 0 rules are also written as formal models and machine-checked ([verification/](verification/README.md)):

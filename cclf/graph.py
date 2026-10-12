@@ -245,6 +245,7 @@ def _architecture(args: dict) -> Architecture:
         # A dict comprehension: same keys, each list of names made a set.
         reporters={k: set(v) for k, v in args.get("reporters", {}).items()},
         interested_parties={k: set(v) for k, v in args.get("interested_parties", {}).items()},
+        critical=dict(args.get("critical", {})),
     )
 
 
